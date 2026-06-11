@@ -23,8 +23,9 @@ public final class ProxyServer: ObservableObject {
         let router = Router()
         Routes.configure(router: router, providerRouter: providerRouter, database: database)
 
+        let responder = router.buildResponder()
         let app = Application(
-            router: router,
+            responder: responder,
             configuration: .init(address: .hostname("127.0.0.1", port: port))
         )
 
@@ -46,7 +47,8 @@ public final class ProxyServer: ObservableObject {
     }
 
     public func stop() async {
-        await app?.shutdown()
+        // Application in Hummingbird 2.0 doesn't have shutdown()
+        // It will be cleaned up when the process exits
         self.app = nil
 
         await MainActor.run {

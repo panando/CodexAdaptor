@@ -1,5 +1,5 @@
 import Foundation
-import CodexRouterDB
+import CodexRouterCore
 
 /// Manages provider selection and failover.
 public actor ProviderRouter {

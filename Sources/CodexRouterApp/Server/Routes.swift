@@ -6,7 +6,7 @@ import CodexRouterDB
 /// Route configuration for proxy server.
 public enum Routes {
     public static func configure(
-        router: Router,
+        router: Router<BasicRequestContext>,
         providerRouter: ProviderRouter,
         database: Database
     ) {

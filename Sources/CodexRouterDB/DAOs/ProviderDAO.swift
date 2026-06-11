@@ -12,7 +12,7 @@ public final class ProviderDAO {
 
     /// Save a provider.
     public func save(_ provider: Provider, appType: String = "codex") throws {
-        let record = try ProviderRecord(from: provider, appType: appType)
+        var record = try ProviderRecord(from: provider, appType: appType)
         try db.dbQueue.write { db in
             try record.save(db)
         }

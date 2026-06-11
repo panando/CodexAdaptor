@@ -24,7 +24,7 @@ public final class ProxyConfigDAO {
 
     /// Save config for an app type.
     public func save(_ config: ProxyConfig) throws {
-        let record = ProxyConfigRecord(from: config)
+        var record = ProxyConfigRecord(from: config)
         try db.dbQueue.write { db in
             try record.save(db)
         }

@@ -35,6 +35,7 @@ final class TransformerTests: XCTestCase {
     func testResponsesToChatWithToolCalls() throws {
         let transformer = ResponsesToChatTransformer()
 
+        // Use raw string with proper escaping for nested JSON
         let responsesJSON = """
         {
             "id": "resp_456",
@@ -44,7 +45,7 @@ final class TransformerTests: XCTestCase {
                     "type": "function_call",
                     "id": "call_123",
                     "name": "get_weather",
-                    "arguments": "{\"location\": \"Beijing\"}"
+                    "arguments": "{\\"location\\": \\"Beijing\\"}"
                 }
             ]
         }
