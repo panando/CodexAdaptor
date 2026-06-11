@@ -10,6 +10,9 @@ public enum Routes {
         providerRouter: ProviderRouter,
         database: Database
     ) {
+        // Create request handler
+        let requestHandler = RequestHandler(database: database, providerRouter: providerRouter)
+
         // Health check
         router.get("/health") { _, _ in
             return Response(
@@ -33,65 +36,17 @@ public enum Routes {
 
         // Chat Completions
         router.post("/v1/chat/completions") { request, context in
-            return try await handleChatCompletions(
-                request: request,
-                providerRouter: providerRouter,
-                database: database
-            )
+            return try await requestHandler.handle(request: request, endpoint: .chatCompletions)
         }
 
         // Responses API
         router.post("/v1/responses") { request, context in
-            return try await handleResponses(
-                request: request,
-                providerRouter: providerRouter,
-                database: database
-            )
+            return try await requestHandler.handle(request: request, endpoint: .responses)
         }
 
         // Responses Compact
         router.post("/v1/responses/compact") { request, context in
-            return try await handleResponsesCompact(
-                request: request,
-                providerRouter: providerRouter,
-                database: database
-            )
+            return try await requestHandler.handle(request: request, endpoint: .responsesCompact)
         }
-    }
-
-    private static func handleChatCompletions(
-        request: Request,
-        providerRouter: ProviderRouter,
-        database: Database
-    ) async throws -> Response {
-        // TODO: Implement request forwarding
-        return Response(
-            status: .notImplemented,
-            body: .init(byteBuffer: ByteBuffer(string: #"{"error":"Not implemented"}"#))
-        )
-    }
-
-    private static func handleResponses(
-        request: Request,
-        providerRouter: ProviderRouter,
-        database: Database
-    ) async throws -> Response {
-        // TODO: Implement request forwarding
-        return Response(
-            status: .notImplemented,
-            body: .init(byteBuffer: ByteBuffer(string: #"{"error":"Not implemented"}"#))
-        )
-    }
-
-    private static func handleResponsesCompact(
-        request: Request,
-        providerRouter: ProviderRouter,
-        database: Database
-    ) async throws -> Response {
-        // TODO: Implement request forwarding
-        return Response(
-            status: .notImplemented,
-            body: .init(byteBuffer: ByteBuffer(string: #"{"error":"Not implemented"}"#))
-        )
     }
 }
