@@ -6,6 +6,7 @@ import CodexRouterDB
 public class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var appState: AppState?
+    private var popover: NSPopover?
 
     public override init() {
         super.init()
@@ -39,7 +40,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[CodexRouter] setupMenuBar called")
 
         // Create status item
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         guard let statusItem = statusItem else {
             NSLog("[CodexRouter] Failed to create status item")
@@ -48,18 +49,22 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSLog("[CodexRouter] Status item created successfully")
 
-        // Set the button image
+        // Set the button
         if let button = statusItem.button {
-            // 使用文本而不是图标，更容易看到
-            button.title = "CR"
-            button.image = nil
+            button.image = NSImage(systemSymbolName: "network", accessibilityDescription: "CodexRouter")
+            button.imagePosition = .imageOnly
             button.toolTip = "CodexRouter - Click to manage"
-            NSLog("[CodexRouter] Button configured with text 'CR'")
-        } else {
-            NSLog("[CodexRouter] No button found!")
+            NSLog("[CodexRouter] Button configured")
         }
 
-        // Create menu
+        // Create popover for main view
+        let popover = NSPopover()
+        popover.contentSize = NSSize(width: 300, height: 320)
+        popover.behavior = .transient
+        popover.animates = true
+        self.popover = popover
+
+        // Create menu for right-click
         let menu = NSMenu()
 
         // Status menu item
@@ -82,32 +87,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Manage Providers
-        let providersMenuItem = NSMenuItem(
-            title: "Manage Providers...",
-            action: #selector(openProviders(_:)),
-            keyEquivalent: "p"
+        // Open main window
+        let openItem = NSMenuItem(
+            title: "Open Dashboard...",
+            action: #selector(openDashboard(_:)),
+            keyEquivalent: "o"
         )
-        providersMenuItem.target = self
-        menu.addItem(providersMenuItem)
-
-        // Failover Config
-        let failoverMenuItem = NSMenuItem(
-            title: "Failover Config...",
-            action: #selector(openFailover(_:)),
-            keyEquivalent: "f"
-        )
-        failoverMenuItem.target = self
-        menu.addItem(failoverMenuItem)
-
-        // Settings
-        let settingsMenuItem = NSMenuItem(
-            title: "Settings...",
-            action: #selector(openSettings(_:)),
-            keyEquivalent: ","
-        )
-        settingsMenuItem.target = self
-        menu.addItem(settingsMenuItem)
+        openItem.target = self
+        menu.addItem(openItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -121,7 +108,29 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitMenuItem)
 
         statusItem.menu = menu
+
+        // Left click shows popover
+        if let button = statusItem.button {
+            button.action = #selector(statusBarButtonClicked(_:))
+            button.target = self
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+
         NSLog("[CodexRouter] Menu set, items count: \(menu.items.count)")
+    }
+
+    @objc private func statusBarButtonClicked(_ sender: NSStatusBarButton) {
+        guard let appState = appState else { return }
+
+        let popover = NSPopover()
+        popover.contentSize = NSSize(width: 300, height: 320)
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentViewController = NSHostingController(rootView: MainView(appState: appState))
+
+        if let button = statusItem?.button {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
     }
 
     @MainActor
@@ -154,61 +163,31 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func openProviders(_ sender: NSMenuItem) {
+    @objc private func openDashboard(_ sender: NSMenuItem) {
         guard let appState = appState else { return }
-        openWindow(
-            id: "providers",
-            title: "Providers",
-            size: NSSize(width: 500, height: 400),
-            view: ProviderListView(appState: appState)
-        )
-    }
 
-    @objc private func openFailover(_ sender: NSMenuItem) {
-        guard let appState = appState else { return }
-        openWindow(
-            id: "failover",
-            title: "Failover Configuration",
-            size: NSSize(width: 450, height: 500),
-            view: FailoverConfigView(appState: appState)
-        )
-    }
-
-    @objc private func openSettings(_ sender: NSMenuItem) {
-        guard let appState = appState else { return }
-        openWindow(
-            id: "settings",
-            title: "Settings",
-            size: NSSize(width: 450, height: 500),
-            view: SettingsView(appState: appState)
-        )
-    }
-
-    @objc private func quit(_ sender: NSMenuItem) {
-        NSApplication.shared.terminate(nil)
-    }
-
-    private func openWindow(id: String, title: String, size: NSSize, view: some View) {
         NSApplication.shared.activate(ignoringOtherApps: true)
 
-        // Check for existing window
-        if let existingWindow = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == id }) {
+        if let existingWindow = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "dashboard" }) {
             existingWindow.makeKeyAndOrderFront(nil)
             return
         }
 
-        // Create new window
         let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: size),
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 320),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = title
-        window.identifier = NSUserInterfaceItemIdentifier(id)
+        window.title = "CodexRouter"
+        window.identifier = NSUserInterfaceItemIdentifier("dashboard")
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: view)
+        window.contentView = NSHostingView(rootView: MainView(appState: appState))
         window.center()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func quit(_ sender: NSMenuItem) {
+        NSApplication.shared.terminate(nil)
     }
 }
