@@ -22,8 +22,8 @@ public final class ProviderDAO {
     public func getAll(appType: String = "codex") throws -> [Provider] {
         try db.dbQueue.read { db in
             let records = try ProviderRecord
-                .filter(Column("appType") == appType)
-                .order(Column("sortIndex"))
+                .filter(Column("app_type") == appType)
+                .order(Column("sort_index"))
                 .fetchAll(db)
             return try records.map { try $0.toProvider() }
         }
@@ -33,7 +33,7 @@ public final class ProviderDAO {
     public func get(byId id: String, appType: String = "codex") throws -> Provider? {
         try db.dbQueue.read { db in
             guard let record = try ProviderRecord
-                .filter(Column("id") == id && Column("appType") == appType)
+                .filter(Column("id") == id && Column("app_type") == appType)
                 .fetchOne(db) else {
                 return nil
             }
@@ -45,7 +45,7 @@ public final class ProviderDAO {
     public func delete(id: String, appType: String = "codex") throws {
         try db.dbQueue.write { db in
             _ = try ProviderRecord
-                .filter(Column("id") == id && Column("appType") == appType)
+                .filter(Column("id") == id && Column("app_type") == appType)
                 .deleteAll(db)
         }
     }
@@ -70,7 +70,7 @@ public final class ProviderDAO {
     public func getCurrent(appType: String = "codex") throws -> Provider? {
         try db.dbQueue.read { db in
             guard let record = try ProviderRecord
-                .filter(Column("appType") == appType && Column("sortIndex") == 0)
+                .filter(Column("app_type") == appType && Column("sort_index") == 0)
                 .fetchOne(db) else {
                 return nil
             }

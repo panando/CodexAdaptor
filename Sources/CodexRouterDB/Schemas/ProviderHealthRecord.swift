@@ -14,6 +14,16 @@ public struct ProviderHealthRecord: Codable, FetchableRecord, MutablePersistable
     public var lastFailureAt: Date?
     public var lastError: String?
 
+    enum CodingKeys: String, CodingKey {
+        case providerId = "provider_id"
+        case appType = "app_type"
+        case isHealthy = "is_healthy"
+        case consecutiveFailures = "consecutive_failures"
+        case lastSuccessAt = "last_success_at"
+        case lastFailureAt = "last_failure_at"
+        case lastError = "last_error"
+    }
+
     public init(
         providerId: String,
         appType: String,

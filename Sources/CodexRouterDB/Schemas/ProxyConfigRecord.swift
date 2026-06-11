@@ -15,6 +15,17 @@ public struct ProxyConfigRecord: Codable, FetchableRecord, MutablePersistableRec
     public var streamingFirstByteTimeout: Int
     public var streamingIdleTimeout: Int
 
+    enum CodingKeys: String, CodingKey {
+        case appType = "app_type"
+        case autoFailoverEnabled = "auto_failover_enabled"
+        case maxRetries = "max_retries"
+        case circuitFailureThreshold = "circuit_failure_threshold"
+        case circuitSuccessThreshold = "circuit_success_threshold"
+        case circuitTimeoutSeconds = "circuit_timeout_seconds"
+        case streamingFirstByteTimeout = "streaming_first_byte_timeout"
+        case streamingIdleTimeout = "streaming_idle_timeout"
+    }
+
     public init(from config: ProxyConfig) {
         self.appType = config.appType
         self.autoFailoverEnabled = config.autoFailoverEnabled

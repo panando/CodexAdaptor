@@ -16,6 +16,18 @@ public struct ProviderRecord: Codable, FetchableRecord, MutablePersistableRecord
     public var inFailoverQueue: Bool
     public var createdAt: Date?
 
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case appType = "app_type"
+        case settingsConfig = "settings_config"
+        case category
+        case meta
+        case sortIndex = "sort_index"
+        case inFailoverQueue = "in_failover_queue"
+        case createdAt = "created_at"
+    }
+
     public init(from provider: Provider, appType: String = "codex") throws {
         self.id = provider.id
         self.name = provider.name

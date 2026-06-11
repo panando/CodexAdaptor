@@ -43,7 +43,7 @@ public final class ProviderHealthDAO {
     public func get(providerId: String, appType: String) throws -> ProviderHealth {
         try db.dbQueue.read { db in
             guard let record = try ProviderHealthRecord
-                .filter(Column("providerId") == providerId && Column("appType") == appType)
+                .filter(Column("provider_id") == providerId && Column("app_type") == appType)
                 .fetchOne(db) else {
                 return ProviderHealth(providerId: providerId, appType: appType)
             }
@@ -63,7 +63,7 @@ public final class ProviderHealthDAO {
     public func recordSuccess(providerId: String, appType: String) throws {
         try db.dbQueue.write { db in
             var record = try ProviderHealthRecord
-                .filter(Column("providerId") == providerId && Column("appType") == appType)
+                .filter(Column("provider_id") == providerId && Column("app_type") == appType)
                 .fetchOne(db) ?? ProviderHealthRecord(providerId: providerId, appType: appType)
 
             record.isHealthy = true
@@ -79,7 +79,7 @@ public final class ProviderHealthDAO {
     public func recordFailure(providerId: String, appType: String, error: String? = nil) throws {
         try db.dbQueue.write { db in
             var record = try ProviderHealthRecord
-                .filter(Column("providerId") == providerId && Column("appType") == appType)
+                .filter(Column("provider_id") == providerId && Column("app_type") == appType)
                 .fetchOne(db) ?? ProviderHealthRecord(providerId: providerId, appType: appType)
 
             record.consecutiveFailures += 1
@@ -99,7 +99,7 @@ public final class ProviderHealthDAO {
     public func reset(providerId: String, appType: String) throws {
         try db.dbQueue.write { db in
             var record = try ProviderHealthRecord
-                .filter(Column("providerId") == providerId && Column("appType") == appType)
+                .filter(Column("provider_id") == providerId && Column("app_type") == appType)
                 .fetchOne(db) ?? ProviderHealthRecord(providerId: providerId, appType: appType)
 
             record.isHealthy = true
@@ -114,7 +114,7 @@ public final class ProviderHealthDAO {
     public func getUnhealthyProviders(appType: String) throws -> [ProviderHealth] {
         try db.dbQueue.read { db in
             let records = try ProviderHealthRecord
-                .filter(Column("appType") == appType && Column("isHealthy") == false)
+                .filter(Column("app_type") == appType && Column("is_healthy") == false)
                 .fetchAll(db)
 
             return records.map { record in

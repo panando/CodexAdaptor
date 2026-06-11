@@ -14,7 +14,7 @@ public final class ProxyConfigDAO {
     public func get(appType: String = "codex") throws -> ProxyConfig {
         try db.dbQueue.read { db in
             guard let record = try ProxyConfigRecord
-                .filter(Column("appType") == appType)
+                .filter(Column("app_type") == appType)
                 .fetchOne(db) else {
                 return ProxyConfig(appType: appType)
             }

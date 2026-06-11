@@ -10,6 +10,12 @@ public struct FailoverQueueRecord: Codable, FetchableRecord, PersistableRecord {
     public var providerId: String
     public var priority: Int
 
+    enum CodingKeys: String, CodingKey {
+        case appType = "app_type"
+        case providerId = "provider_id"
+        case priority
+    }
+
     public init(appType: String, providerId: String, priority: Int) {
         self.appType = appType
         self.providerId = providerId
