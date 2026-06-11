@@ -85,6 +85,10 @@ public enum ProxyEndpoint: String, Sendable {
         case .chatCompletions:
             return "/v1/chat/completions"
         case .responses:
+            // Check if provider uses Responses API format
+            if provider.meta?.apiFormat == "responses" {
+                return "/v1/responses"
+            }
             return "/v1/responses"
         case .responsesCompact:
             return "/v1/responses/compact"

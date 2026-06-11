@@ -26,18 +26,40 @@ public enum Routes {
             return try await requestHandler.handle(request: request, endpoint: .models)
         }
 
-        // Chat Completions
+        // Chat Completions (with /v1 prefix)
         router.post("/v1/chat/completions") { request, context in
             return try await requestHandler.handle(request: request, endpoint: .chatCompletions)
         }
 
-        // Responses API
+        // Responses API (with /v1 prefix)
         router.post("/v1/responses") { request, context in
             return try await requestHandler.handle(request: request, endpoint: .responses)
         }
 
-        // Responses Compact
+        // Responses Compact (with /v1 prefix)
         router.post("/v1/responses/compact") { request, context in
+            return try await requestHandler.handle(request: request, endpoint: .responsesCompact)
+        }
+
+        // MARK: - Routes without /v1 prefix (for Codex compatibility)
+
+        // Models
+        router.get("/models") { request, context in
+            return try await requestHandler.handle(request: request, endpoint: .models)
+        }
+
+        // Chat Completions
+        router.post("/chat/completions") { request, context in
+            return try await requestHandler.handle(request: request, endpoint: .chatCompletions)
+        }
+
+        // Responses API
+        router.post("/responses") { request, context in
+            return try await requestHandler.handle(request: request, endpoint: .responses)
+        }
+
+        // Responses Compact
+        router.post("/responses/compact") { request, context in
             return try await requestHandler.handle(request: request, endpoint: .responsesCompact)
         }
     }
