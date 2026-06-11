@@ -50,5 +50,10 @@ let package = Package(
             dependencies: ["CodexRouterDB"],
             path: "Tests/CodexRouterDBTests"
         ),
+        .testTarget(
+            name: "CodexRouterAppTests",
+            dependencies: ["CodexRouterApp"],
+            path: "Tests/CodexRouterAppTests"
+        ),
     ]
 )
