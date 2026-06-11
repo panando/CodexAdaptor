@@ -1,0 +1,31 @@
+cc-switch
+
+# Build
+.build/
+build/
+
+# Xcode
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+*.xcworkspace/*
+!*.xcworkspace/contents.xcworkspacedata
+!*.xcworkspace/xcshareddata/
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+
+# macOS
+.DS_Store
+*.swp
+*~.nib
+
+# IDEs
+*.idea/
+*.vscode/
+
+# Secrets
+*.env
+*.pem
+*.p12
