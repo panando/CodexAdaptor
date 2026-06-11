@@ -21,17 +21,9 @@ public enum Routes {
             )
         }
 
-        // Models endpoint
-        router.get("/v1/models") { _, _ in
-            let response: [String: Any] = [
-                "object": "list",
-                "data": []
-            ]
-            let data = try! JSONSerialization.data(withJSONObject: response)
-            return Response(
-                status: .ok,
-                body: .init(byteBuffer: ByteBuffer(data: data))
-            )
+        // Models endpoint - proxy to upstream
+        router.get("/v1/models") { request, context in
+            return try await requestHandler.handle(request: request, endpoint: .models)
         }
 
         // Chat Completions

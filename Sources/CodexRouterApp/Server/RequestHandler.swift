@@ -39,18 +39,20 @@ public actor RequestHandler {
             )
         }
 
-        // Check circuit breaker
-        let breaker = await providerRouter.getCircuitBreaker(for: provider.id)
-        guard await breaker.allowRequest() else {
-            // Try failover if enabled
-            if let failoverProvider = try await getFailoverProvider(excludeIds: [provider.id]) {
-                return try await forwardRequest(request: request, provider: failoverProvider, endpoint: endpoint)
-            }
+        // Check circuit breaker (skip for models endpoint)
+        if endpoint != .models {
+            let breaker = await providerRouter.getCircuitBreaker(for: provider.id)
+            guard await breaker.allowRequest() else {
+                // Try failover if enabled
+                if let failoverProvider = try await getFailoverProvider(excludeIds: [provider.id]) {
+                    return try await forwardRequest(request: request, provider: failoverProvider, endpoint: endpoint)
+                }
 
-            return Response(
-                status: .serviceUnavailable,
-                body: .init(byteBuffer: ByteBuffer(string: #"{"error":"Provider unavailable"}"#))
-            )
+                return Response(
+                    status: .serviceUnavailable,
+                    body: .init(byteBuffer: ByteBuffer(string: #"{"error":"Provider unavailable"}"#))
+                )
+            }
         }
 
         return try await forwardRequest(request: request, provider: provider, endpoint: endpoint)
@@ -73,7 +75,41 @@ public actor RequestHandler {
         let upstreamURL = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             + endpoint.upstreamPath(provider: provider)
 
-        // Parse request body - collect from async sequence
+        // Build headers
+        var headers: [String: String] = [:]
+        headers["Content-Type"] = "application/json"
+
+        // Get API key from Keychain
+        if let apiKey = try? KeychainService.shared.getAPIKey(for: provider.id) {
+            headers["Authorization"] = "Bearer \(apiKey)"
+        }
+
+        if let customUserAgent = provider.meta?.customUserAgent {
+            headers["User-Agent"] = customUserAgent
+        }
+
+        // Handle GET requests (models endpoint)
+        if endpoint == .models {
+            do {
+                let (data, status) = try await httpClient.send(
+                    url: upstreamURL,
+                    method: .get,
+                    headers: headers,
+                    body: nil
+                )
+                return Response(
+                    status: status,
+                    body: .init(byteBuffer: ByteBuffer(data: data))
+                )
+            } catch {
+                return Response(
+                    status: .badGateway,
+                    body: .init(byteBuffer: ByteBuffer(string: #"{"error":"\#(error.localizedDescription)"}"#))
+                )
+            }
+        }
+
+        // Parse request body for POST requests
         var requestBody: Data?
         var bodyBuffer = ByteBuffer()
         for try await chunk in request.body {
@@ -96,18 +132,6 @@ public actor RequestHandler {
 
         // Determine if streaming
         let isStreaming = requestJSON?["stream"] as? Bool ?? false
-
-        // Build headers
-        var headers: [String: String] = [:]
-        headers["Content-Type"] = "application/json"
-
-        if let apiKey = provider.apiKey {
-            headers["Authorization"] = "Bearer \(apiKey)"
-        }
-
-        if let customUserAgent = provider.meta?.customUserAgent {
-            headers["User-Agent"] = customUserAgent
-        }
 
         // Send request
         do {
