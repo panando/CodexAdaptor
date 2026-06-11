@@ -95,6 +95,19 @@ public struct MainView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
+
+                // Codex Integration
+                Button(action: {
+                    openWindow(id: "codex", title: "Codex Integration", size: NSSize(width: 420, height: 320)) {
+                        CodexIntegrationView(appState: appState)
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: "app.badge.checkmark")
+                        Text("Codex Integration")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
             }
 
             Divider()

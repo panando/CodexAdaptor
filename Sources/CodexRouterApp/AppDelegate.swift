@@ -96,6 +96,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         openItem.target = self
         menu.addItem(openItem)
 
+        // Codex Integration
+        let codexItem = NSMenuItem(
+            title: "Codex Integration...",
+            action: #selector(openCodexIntegration(_:)),
+            keyEquivalent: "c"
+        )
+        codexItem.target = self
+        menu.addItem(codexItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // Quit
@@ -174,7 +183,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 300, height: 320),
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 360),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
@@ -183,6 +192,30 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         window.identifier = NSUserInterfaceItemIdentifier("dashboard")
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: MainView(appState: appState))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func openCodexIntegration(_ sender: NSMenuItem) {
+        guard let appState = appState else { return }
+
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
+        if let existingWindow = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "codex" }) {
+            existingWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Codex Integration"
+        window.identifier = NSUserInterfaceItemIdentifier("codex")
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: CodexIntegrationView(appState: appState))
         window.center()
         window.makeKeyAndOrderFront(nil)
     }
