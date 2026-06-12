@@ -5,7 +5,7 @@ import CodexRouterCore
 public struct ConfigurationView: View {
     @ObservedObject var appState: AppState
     @ObservedObject private var loc = LocalizationService.shared
-    @State private var selectedTab: ConfigTab? = .server
+    @State private var selectedTab: ConfigTab? = .providers
 
     public init(appState: AppState) {
         self.appState = appState
