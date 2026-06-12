@@ -453,6 +453,7 @@ public struct ProviderFormView: View {
                     ) {
                         HStack {
                             Toggle(L10n.overrideReasoning, isOn: $showReasoningConfig)
+                                .toggleStyle(.switch)
                             Spacer()
                             Button(L10n.autoDetect) {
                                 if !baseURL.isEmpty {
@@ -476,6 +477,7 @@ public struct ProviderFormView: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Toggle(L10n.enableThinking, isOn: $supportsThinking)
+                                        .toggleStyle(.switch)
                                     Text(L10n.thinkingDesc)
                                         .font(.caption).foregroundColor(.secondary)
 
@@ -493,6 +495,7 @@ public struct ProviderFormView: View {
 
                                 VStack(alignment: .leading, spacing: 4) {
                                     Toggle(L10n.enableEffort, isOn: $supportsEffort)
+                                        .toggleStyle(.switch)
                                     Text(L10n.effortDesc)
                                         .font(.caption).foregroundColor(.secondary)
 
