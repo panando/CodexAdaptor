@@ -280,37 +280,35 @@ public struct ProviderFormView: View {
 
     @ViewBuilder
     private var modelEditorForm: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                TextField("", text: $newModelDisplayName, prompt: Text(L10n.displayNamePrompt))
-                    .textFieldStyle(.roundedBorder)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity)
+        HStack(spacing: 12) {
+            TextField(L10n.modelAliasDesc, text: $newModelDisplayName)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity)
 
-                TextField("", text: $newModelSlug, prompt: Text(L10n.modelSlugPrompt))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.callout, design: .monospaced))
-                    .multilineTextAlignment(.leading)
-                    .autocorrectionDisabled()
-                    .frame(maxWidth: .infinity)
+            TextField(L10n.modelSlugDesc, text: $newModelSlug)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.callout, design: .monospaced))
+                .multilineTextAlignment(.leading)
+                .autocorrectionDisabled()
+                .frame(maxWidth: .infinity)
 
-                TextField("", text: $newModelContextWindow, prompt: Text(L10n.contextWindowPrompt))
-                    .textFieldStyle(.roundedBorder)
-                    .multilineTextAlignment(.leading)
-                    .frame(width: 100)
+            TextField(L10n.contextWindowExample, text: $newModelContextWindow)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.leading)
+                .frame(width: 100)
 
-                Spacer().frame(width: 24)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-
-            HStack(spacing: 10) {
-                Button(L10n.cancel) {
+            HStack(spacing: 4) {
+                Button {
                     resetModelForm()
                     showAddModel = false
+                } label: {
+                    Image(systemName: "xmark.circle")
                 }
+                .buttonStyle(.borderless)
                 .controlSize(.small)
-                Button(L10n.add) {
+
+                Button {
                     guard !newModelSlug.isEmpty else { return }
                     let entry = ModelCatalogEntry(
                         model: newModelSlug,
@@ -320,16 +318,15 @@ public struct ProviderFormView: View {
                     modelCatalog.models.append(entry)
                     resetModelForm()
                     showAddModel = false
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.borderless)
                 .controlSize(.small)
                 .disabled(newModelSlug.isEmpty)
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
+            .frame(width: 44)
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
 
     private func resetModelForm() {
@@ -500,57 +497,26 @@ public struct ProviderFormView: View {
                         }
                     }
 
-                }
-                .formStyle(.grouped)
-                .frame(minWidth: 600)
-
-                // Custom Models — outside Form to avoid .formStyle(.grouped) alignment issues
-                // Styled to match Form's grouped sections
-                VStack(alignment: .leading, spacing: 0) {
-                    // Section header — matches Form's Section header style
-                    Label(L10n.customModels, systemImage: "cube.box")
-                        .font(.subheadline).fontWeight(.medium)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 6)
-
-                    // Content — same background and corner radius as Form sections
-                    VStack(spacing: 0) {
-                        // Column headers with descriptions
+                    // Custom Models
+                    Section {
+                        // Column headers
                         HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(L10n.modelAlias)
-                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                Text(L10n.modelAliasDesc)
-                                    .font(.caption2).foregroundColor(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(L10n.modelSlug)
-                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                Text(L10n.modelSlugDesc)
-                                    .font(.caption2).foregroundColor(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(L10n.contextWindow)
-                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                Text(L10n.contextWindowExample)
-                                    .font(.caption2).foregroundColor(.secondary)
-                            }
-                            .frame(width: 100, alignment: .leading)
+                            Text(L10n.modelAlias)
+                                .font(.caption).foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(L10n.modelSlug)
+                                .font(.caption).foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(L10n.contextWindow)
+                                .font(.caption).foregroundColor(.secondary)
+                                .frame(width: 100, alignment: .leading)
                             Spacer().frame(width: 24)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 10)
-                        .padding(.bottom, 4)
-
-                        Divider().padding(.horizontal, 16)
 
                         // Editable model rows
                         ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, _ in
                             HStack(spacing: 12) {
-                                TextField("", text: Binding(
+                                TextField(L10n.modelAliasDesc, text: Binding(
                                     get: { modelCatalog.models[index].displayName ?? "" },
                                     set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
                                 ))
@@ -558,7 +524,7 @@ public struct ProviderFormView: View {
                                 .multilineTextAlignment(.leading)
                                 .frame(maxWidth: .infinity)
 
-                                TextField("", text: Binding(
+                                TextField(L10n.modelSlugDesc, text: Binding(
                                     get: { modelCatalog.models[index].model },
                                     set: { modelCatalog.models[index].model = $0 }
                                 ))
@@ -567,7 +533,7 @@ public struct ProviderFormView: View {
                                 .multilineTextAlignment(.leading)
                                 .frame(maxWidth: .infinity)
 
-                                TextField("", text: Binding(
+                                TextField(L10n.contextWindowExample, text: Binding(
                                     get: { modelCatalog.models[index].contextWindow.map { String($0) } ?? "" },
                                     set: { modelCatalog.models[index].contextWindow = UInt64($0) }
                                 ))
@@ -585,20 +551,11 @@ public struct ProviderFormView: View {
                                 .help(L10n.removeModel)
                                 .frame(width: 24)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 6)
-
-                            if index < modelCatalog.models.count - 1 {
-                                Divider().padding(.horizontal, 16)
-                            }
                         }
 
                         if showAddModel {
-                            Divider().padding(.horizontal, 16)
                             modelEditorForm
                         }
-
-                        Divider().padding(.horizontal, 16)
 
                         if !showAddModel {
                             Button {
@@ -609,22 +566,16 @@ public struct ProviderFormView: View {
                             }
                             .buttonStyle(.borderless)
                             .controlSize(.small)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
                         }
+                    } header: {
+                        Label(L10n.customModels, systemImage: "cube.box")
+                    } footer: {
+                        Text(L10n.modelFooter)
                     }
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .cornerRadius(6)
-                    .padding(.horizontal, 20)
 
-                    // Footer — matches Form's Section footer style
-                    Text(L10n.modelFooter)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 6)
                 }
-                .padding(.vertical, 8)
+                .formStyle(.grouped)
+                .frame(minWidth: 600)
             }
 
             Divider()
