@@ -90,16 +90,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        let configureItem = NSMenuItem(title: L10n.configure, action: #selector(openConfigure), keyEquivalent: ",")
+        configureItem.target = self
+        menu.addItem(configureItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let toggleItem = NSMenuItem(title: L10n.stopServer, action: #selector(toggleServer), keyEquivalent: "s")
         toggleItem.tag = 2
         toggleItem.target = self
         menu.addItem(toggleItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let configureItem = NSMenuItem(title: L10n.configure, action: #selector(openConfigure), keyEquivalent: ",")
-        configureItem.target = self
-        menu.addItem(configureItem)
 
         menu.addItem(NSMenuItem.separator())
 

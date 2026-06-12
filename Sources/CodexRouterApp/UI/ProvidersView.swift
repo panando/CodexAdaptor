@@ -119,7 +119,7 @@ public struct ProvidersView: View {
     private func openProviderForm(provider: CodexModelProvider? = nil) {
         let w = provider != nil ? L10n.editProvider : L10n.addProvider
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 820),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false
         )
