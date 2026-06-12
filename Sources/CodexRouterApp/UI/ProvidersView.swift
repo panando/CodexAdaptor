@@ -264,7 +264,6 @@ public struct ProviderFormView: View {
     @State private var bearerToken: String = ""
     @State private var modelCatalog: ModelCatalog = ModelCatalog(models: [])
     @State private var showAddModel: Bool = false
-    @State private var editingModelIndex: Int?
     @State private var newModelSlug: String = ""
     @State private var newModelDisplayName: String = ""
     @State private var newModelContextWindow: String = "128000"
@@ -326,18 +325,14 @@ public struct ProviderFormView: View {
                     showAddModel = false
                 }
                 .controlSize(.small)
-                Button(editingModelIndex != nil ? L10n.save : L10n.add) {
+                Button(L10n.add) {
                     guard !newModelSlug.isEmpty else { return }
                     let entry = ModelCatalogEntry(
                         model: newModelSlug,
                         displayName: newModelDisplayName.isEmpty ? nil : newModelDisplayName,
                         contextWindow: UInt64(newModelContextWindow)
                     )
-                    if let idx = editingModelIndex, idx < modelCatalog.models.count {
-                        modelCatalog.models[idx] = entry
-                    } else {
-                        modelCatalog.models.append(entry)
-                    }
+                    modelCatalog.models.append(entry)
                     resetModelForm()
                     showAddModel = false
                 }
@@ -363,7 +358,6 @@ public struct ProviderFormView: View {
         newModelSlug = ""
         newModelDisplayName = ""
         newModelContextWindow = "128000"
-        editingModelIndex = nil
     }
 
     public init(appState: AppState, provider: CodexModelProvider?, onSave: @escaping (CodexModelProvider) -> Void, onDismiss: @escaping () -> Void) {
@@ -540,80 +534,65 @@ public struct ProviderFormView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 Text(L10n.contextWindow)
                                     .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                    .frame(width: 60, alignment: .trailing)
-                                Spacer().frame(width: 52)
+                                    .frame(width: 80, alignment: .leading)
+                                Spacer().frame(width: 28)
                             }
                             .padding(.horizontal, 4)
                             .padding(.bottom, 2)
                         }
 
-                        // Model list
+                        // Model list — directly editable
                         ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, model in
                             HStack(spacing: 12) {
-                                // Display name (alias)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(model.displayName ?? model.model)
-                                        .font(.body).fontWeight(.medium)
-                                    if model.displayName != nil {
-                                        Text(model.model)
-                                            .font(.caption2).foregroundColor(.secondary)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                // Model alias
+                                TextField("", text: Binding(
+                                    get: { modelCatalog.models[index].displayName ?? "" },
+                                    set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity)
 
                                 // Actual model name
-                                Text(model.model)
-                                    .font(.system(.callout, design: .monospaced))
-                                    .foregroundColor(.primary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                TextField("", text: Binding(
+                                    get: { modelCatalog.models[index].model },
+                                    set: { modelCatalog.models[index].model = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.callout, design: .monospaced))
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity)
 
                                 // Context window
-                                Text(model.contextWindow.map { "\($0 / 1000)K" } ?? "—")
-                                    .font(.callout).foregroundColor(.secondary)
-                                    .frame(width: 60, alignment: .trailing)
+                                TextField("", text: Binding(
+                                    get: { modelCatalog.models[index].contextWindow.map { String($0) } ?? "" },
+                                    set: { modelCatalog.models[index].contextWindow = UInt64($0) }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.leading)
+                                .frame(width: 80)
 
-                                // Actions
-                                HStack(spacing: 6) {
-                                    Button {
-                                        newModelSlug = model.model
-                                        newModelDisplayName = model.displayName ?? ""
-                                        newModelContextWindow = model.contextWindow.map { String($0) } ?? "128000"
-                                        editingModelIndex = index
-                                        showAddModel = true
-                                    } label: {
-                                        Image(systemName: "pencil")
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .controlSize(.small)
-                                    .help(L10n.editModel)
-
-                                    Button {
-                                        modelIndexToDelete = index
-                                    } label: {
-                                        Image(systemName: "trash")
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .controlSize(.small)
-                                    .help(L10n.removeModel)
+                                // Delete
+                                Button {
+                                    modelIndexToDelete = index
+                                } label: {
+                                    Image(systemName: "trash")
                                 }
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
+                                .help(L10n.removeModel)
                             }
-                            .padding(.vertical, 4)
-
-                            // Inline form appears right below the edited row
-                            if showAddModel && editingModelIndex == index {
-                                modelEditorForm
-                            }
+                            .padding(.vertical, 2)
                         }
 
-                        // Inline form for adding new model (appears after last row)
-                        if showAddModel && editingModelIndex == nil {
+                        // Inline form for adding new model
+                        if showAddModel {
                             modelEditorForm
                         }
 
                         if !showAddModel {
                             Button {
                                 resetModelForm()
-                                editingModelIndex = nil
                                 showAddModel = true
                             } label: {
                                 Label(L10n.addModel, systemImage: "plus.circle")
