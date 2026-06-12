@@ -1,98 +1,223 @@
 import Foundation
 
 /// Adapts reasoning parameters for different AI platforms.
+/// Follows cc-switch's transform_codex_chat.rs apply_reasoning_options and map_reasoning_effort.
 public struct ReasoningRectifier: Sendable {
 
     public init() {}
 
-    /// Rectify request parameters for a specific platform.
-    /// Provider is optional since we now use simplified UpstreamProvider.
-    public func rectifyRequest(
-        _ request: inout [String: Any],
-        provider: Provider?,
-        platform: ReasoningPlatform
+    // MARK: - Reasoning application (during Responses→Chat conversion)
+
+    /// Apply reasoning options during Responses→Chat Completions conversion.
+    /// Reads reasoning/effort from the original Responses body, writes thinking/effort params to the Chat request.
+    public func applyReasoning(
+        chatRequest: inout [String: Any],
+        responsesBody: [String: Any],
+        config: ReasoningConfig?,
+        model: String
     ) {
-        // If no provider config, use platform-based defaults
-        guard let config = provider?.meta?.codexChatReasoning else {
-            // Apply platform-specific defaults without config
-            applyPlatformDefaults(&request, platform: platform)
+        guard let config = config else {
+            // Without config: pass through reasoning_effort if model supports it
+            if supportsReasoningEffort(model: model) {
+                if let effort = (responsesBody["reasoning"] as? [String: Any])?["effort"] as? String {
+                    chatRequest["reasoning_effort"] = effort
+                }
+            }
             return
         }
 
-        switch platform {
-        case .deepseek:
-            rectifyDeepSeek(&request, config: config)
-        case .openrouter:
-            rectifyOpenRouter(&request, config: config)
-        case .siliconflow:
-            rectifySiliconFlow(&request, config: config)
-        case .kimi:
-            rectifyKimi(&request, config: config)
-        case .qwen:
-            rectifyQwen(&request, config: config)
-        case .minimax:
-            rectifyMiniMax(&request, config: config)
-        case .standard:
+        let supportsEffort = config.supportsEffort ?? false
+        let supportsThinking = config.supportsThinking ?? false || supportsEffort
+
+        guard let reasoningEnabled = reasoningRequested(body: responsesBody) else {
+            return
+        }
+
+        // Write thinking param
+        if supportsThinking {
+            let thinkingParam = (config.thinkingParam ?? "thinking").trimmingCharacters(in: .whitespaces).lowercased()
+            switch thinkingParam {
+            case "thinking":
+                chatRequest["thinking"] = [
+                    "type": reasoningEnabled ? "enabled" : "disabled"
+                ]
+            case "enable_thinking":
+                chatRequest["enable_thinking"] = reasoningEnabled
+            case "reasoning_split":
+                chatRequest["reasoning_split"] = reasoningEnabled
+            default:
+                break // "none" or unknown → skip
+            }
+        }
+
+        // If reasoning explicitly disabled
+        if !reasoningEnabled {
+            let effortParam = (config.effortParam ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+            // OpenRouter native reasoning.effort supports explicit "none" (semantics: fully disable reasoning).
+            // For platforms with reasoning.effort param, faithfully forward {"reasoning":{"effort":"none"}}
+            // so models that default to thinking can be explicitly turned off.
+            if effortParam == "reasoning.effort" {
+                chatRequest["reasoning"] = ["effort": "none"]
+            }
+            return
+        }
+
+        guard supportsEffort else { return }
+
+        guard let effort = (responsesBody["reasoning"] as? [String: Any])?["effort"] as? String else {
+            return
+        }
+        guard let mapped = mapEffortValue(effort, mode: config.effortValueMode) else {
+            return
+        }
+
+        let effortParam = (config.effortParam ?? "reasoning_effort").trimmingCharacters(in: .whitespaces).lowercased()
+        switch effortParam {
+        case "reasoning_effort":
+            chatRequest["reasoning_effort"] = mapped
+        case "reasoning.effort":
+            // OpenRouter native normalized object: reasoning.effort gets translated by OpenRouter
+            // into the correct reasoning params for each underlying model (OpenAI/Grok/Gemini/Anthropic).
+            // Construct from empty object so we don't leak residual reasoning fields.
+            chatRequest["reasoning"] = ["effort": mapped]
+        default:
             break
         }
     }
 
-    /// Rectify response for a specific platform.
-    /// Provider is optional since we now use simplified UpstreamProvider.
-    public func rectifyResponse(
-        _ response: inout [String: Any],
-        provider: Provider?,
-        platform: ReasoningPlatform
-    ) {
-        // If no provider config, use platform-based defaults
-        guard let config = provider?.meta?.codexChatReasoning else {
-            // Apply platform-specific response transformation
-            applyPlatformResponseDefaults(&response, platform: platform)
-            return
+    // MARK: - Effort mapping
+
+    /// Map Codex reasoning effort value to provider-specific value.
+    /// Follows cc-switch's map_reasoning_effort exactly.
+    private func mapEffortValue(_ effort: String, mode: String?) -> String? {
+        let effort = effort.trimmingCharacters(in: .whitespaces).lowercased()
+        if ["none", "off", "disabled"].contains(effort) {
+            return nil
         }
 
-        // Handle output format transformation
-        if let outputFormat = config.outputFormat {
-            switch outputFormat {
-            case "reasoning_content":
-                transformReasoningContent(&response)
-            case "reasoning_details":
-                transformReasoningDetails(&response)
-            default:
-                break
+        switch mode ?? "passthrough" {
+        case "deepseek":
+            switch effort {
+            case "max", "xhigh": return "max"
+            default: return "high"
+            }
+        case "low_high":
+            switch effort {
+            case "minimal", "low": return "low"
+            default: return "high"
+            }
+        case "openrouter":
+            // OpenRouter effort enum: xhigh|high|medium|low|minimal (no max).
+            // max is Codex/some model's extended tier, illegal for OpenRouter → clamp to xhigh.
+            switch effort {
+            case "max", "xhigh": return "xhigh"
+            case "high": return "high"
+            case "medium": return "medium"
+            case "low": return "low"
+            case "minimal": return "minimal"
+            default: return nil
+            }
+        default:
+            // Passthrough: filter to known valid values only
+            switch effort {
+            case "minimal": return "minimal"
+            case "low": return "low"
+            case "medium": return "medium"
+            case "high": return "high"
+            case "xhigh": return "xhigh"
+            case "max": return "max"
+            default: return nil
             }
         }
     }
 
-    /// Rectify request using a manual config instead of platform auto-detection.
-    public func rectifyRequestWithConfig(_ request: inout [String: Any], config: ReasoningConfig) {
-        // Apply thinking param
-        if config.supportsThinking == true, let param = config.thinkingParam {
-            // Remove common alternate params
-            if param != "thinking" { request.removeValue(forKey: "thinking") }
-            if param != "enable_thinking" { request.removeValue(forKey: "enable_thinking") }
-            request[param] = true
+    /// Check if the original Responses body requests reasoning.
+    /// Returns nil if reasoning field is absent entirely (not explicitly enabled or disabled).
+    private func reasoningRequested(body: [String: Any]) -> Bool? {
+        if let reasoning = body["reasoning"] as? [String: Any],
+           let effort = reasoning["effort"] as? String {
+            let effort = effort.trimmingCharacters(in: .whitespaces).lowercased()
+            if ["none", "off", "disabled"].contains(effort) {
+                return false
+            }
+            return true
         }
 
-        // Apply effort
-        if config.supportsEffort == true, let effort = request["effort"] as? String {
-            request.removeValue(forKey: "effort")
-            if let mode = config.effortValueMode {
-                switch mode {
-                case "deepseek":
-                    if let param = config.effortParam {
-                        request[param] = mapEffortValue(effort, mode: "deepseek")
-                    } else {
-                        request["reasoning_effort"] = effort
-                    }
-                case "openrouter":
-                    request["reasoning"] = ["effort": effort]
-                default:
-                    request["reasoning_effort"] = effort
+        if let reasoning = body["reasoning"] {
+            return !(reasoning is NSNull)
+        }
+
+        return nil
+    }
+
+    /// Check if a model name suggests reasoning_effort support (for passthrough without config).
+    private func supportsReasoningEffort(model: String) -> Bool {
+        let model = model.lowercased()
+        // OpenAI o-series, GPT-5+, DeepSeek reasoning models etc.
+        let patterns = ["o1", "o3", "o4", "gpt-5", "deepseek-r", "deepseek-v"]
+        return patterns.contains(where: model.contains)
+    }
+
+    // MARK: - Reasoning extraction
+
+    /// Extract reasoning text from a Chat response delta or message.
+    /// Follows cc-switch's extract_reasoning_field_text: checks reasoning_content → reasoning string → reasoning object (content/text/summary) → reasoning_details.
+    public func extractReasoningText(_ value: [String: Any]) -> String? {
+        // reasoning_content string
+        if let text = value["reasoning_content"] as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty {
+            return text
+        }
+        // reasoning string
+        if let text = value["reasoning"] as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty {
+            return text
+        }
+        // reasoning object (OpenRouter)
+        if let reasoning = value["reasoning"] as? [String: Any] {
+            for key in ["content", "text", "summary"] {
+                if let text = reasoning[key] as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                    return text
                 }
             }
         }
+        // reasoning_details array
+        if let details = value["reasoning_details"] {
+            return extractReasoningDetailsText(details)
+        }
+        return nil
     }
+
+    private func extractReasoningDetailsText(_ value: Any) -> String? {
+        if let text = value as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty {
+            return text
+        }
+        if let parts = value as? [[String: Any]] {
+            let text = parts.compactMap { extractReasoningDetailPartText($0) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            return text.isEmpty ? nil : text
+        }
+        if let part = value as? [String: Any] {
+            return extractReasoningDetailPartText(part)
+        }
+        return nil
+    }
+
+    private func extractReasoningDetailPartText(_ value: [String: Any]) -> String? {
+        for key in ["text", "content", "summary"] {
+            if let text = value[key] as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                return text
+            }
+        }
+        if let parts = value["parts"] as? [[String: Any]] {
+            let text = parts.compactMap { extractReasoningDetailPartText($0) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            return text.isEmpty ? nil : text
+        }
+        return nil
+    }
+
+    // MARK: - Response rectification (output format)
 
     /// Rectify response using a manual config.
     public func rectifyResponseWithConfig(_ response: inout [String: Any], config: ReasoningConfig) {
@@ -108,180 +233,55 @@ public struct ReasoningRectifier: Sendable {
         }
     }
 
-    // MARK: - Platform-specific defaults (without config)
-
-    private func applyPlatformDefaults(_ request: inout [String: Any], platform: ReasoningPlatform) {
-        switch platform {
-        case .deepseek:
-            // DeepSeek default: enable thinking for reasoning models
-            if request["thinking"] == nil {
-                request["thinking"] = true
-            }
-        case .siliconflow, .qwen:
-            // SiliconFlow/Qwen default: enable_thinking
-            if request["thinking"] != nil || request["reasoning"] != nil {
-                request.removeValue(forKey: "thinking")
-                request.removeValue(forKey: "reasoning")
-                request["enable_thinking"] = true
-            }
-        default:
-            break
-        }
-    }
-
-    private func applyPlatformResponseDefaults(_ response: inout [String: Any], platform: ReasoningPlatform) {
+    /// Rectify response for a specific platform (auto-detect).
+    public func rectifyResponse(_ response: inout [String: Any], platform: ReasoningPlatform) {
         switch platform {
         case .deepseek, .siliconflow, .qwen:
-            // These platforms use reasoning_content
             transformReasoningContent(&response)
         default:
             break
         }
     }
 
-    // MARK: - Platform-specific rectification
-
-    private func rectifyDeepSeek(_ request: inout [String: Any], config: ReasoningConfig) {
-        // DeepSeek uses "thinking" and "reasoning_effort" parameters
-        if config.supportsThinking == true {
-            // Ensure thinking parameter is set correctly
-            if request["thinking"] == nil, let param = config.thinkingParam {
-                request[param] = true
-            }
-        }
-
-        if config.supportsEffort == true {
-            // Map effort values
-            if let effort = request["effort"] as? String {
-                request.removeValue(forKey: "effort")
-                if let param = config.effortParam {
-                    request[param] = mapEffortValue(effort, mode: "deepseek")
-                }
-            }
-        }
-    }
-
-    private func rectifyOpenRouter(_ request: inout [String: Any], config: ReasoningConfig) {
-        // OpenRouter uses "reasoning.effort" parameter
-        if config.supportsEffort == true {
-            if let effort = request["effort"] as? String {
-                request.removeValue(forKey: "effort")
-                if let param = config.effortParam {
-                    request[param] = mapEffortValue(effort, mode: "openrouter")
-                }
-            }
-        }
-    }
-
-    private func rectifySiliconFlow(_ request: inout [String: Any], config: ReasoningConfig) {
-        // SiliconFlow uses "enable_thinking" parameter
-        if config.supportsThinking == true {
-            if request["thinking"] != nil || request["reasoning"] != nil {
-                request.removeValue(forKey: "thinking")
-                request.removeValue(forKey: "reasoning")
-                if let param = config.thinkingParam {
-                    request[param] = true
-                }
-            }
-        }
-    }
-
-    private func rectifyKimi(_ request: inout [String: Any], config: ReasoningConfig) {
-        // Kimi uses "thinking" parameter
-        if config.supportsThinking == true {
-            if request["enable_thinking"] != nil {
-                request.removeValue(forKey: "enable_thinking")
-                if let param = config.thinkingParam {
-                    request[param] = true
-                }
-            }
-        }
-    }
-
-    private func rectifyQwen(_ request: inout [String: Any], config: ReasoningConfig) {
-        // Qwen uses "enable_thinking" parameter
-        if config.supportsThinking == true {
-            if request["thinking"] != nil || request["reasoning"] != nil {
-                request.removeValue(forKey: "thinking")
-                request.removeValue(forKey: "reasoning")
-                if let param = config.thinkingParam {
-                    request[param] = true
-                }
-            }
-        }
-    }
-
-    private func rectifyMiniMax(_ request: inout [String: Any], config: ReasoningConfig) {
-        // MiniMax uses "reasoning_split" parameter
-        if config.supportsThinking == true {
-            if request["thinking"] != nil || request["reasoning"] != nil {
-                request.removeValue(forKey: "thinking")
-                request.removeValue(forKey: "reasoning")
-                if let param = config.thinkingParam {
-                    request[param] = true
-                }
-            }
-        }
-    }
-
-    // MARK: - Helper methods
-
-    private func mapEffortValue(_ effort: String, mode: String) -> Any {
-        switch mode {
-        case "deepseek":
-            // DeepSeek accepts: low, medium, high
-            return effort.lowercased()
-        case "openrouter":
-            // OpenRouter accepts: low, medium, high
-            return effort.lowercased()
-        default:
-            return effort
-        }
-    }
+    // MARK: - Output format transformers
 
     func transformReasoningContent(_ response: inout [String: Any]) {
-        // Transform reasoning_content to standard format
-        if let choices = response["choices"] as? [[String: Any]] {
-            var newChoices: [[String: Any]] = []
-            for choice in choices {
-                var newChoice = choice
-                if let message = choice["message"] as? [String: Any] {
-                    var newMessage = message
-                    if let reasoningContent = message["reasoning_content"] as? String {
-                        // Prepend reasoning to content
-                        let content = message["content"] as? String ?? ""
-                        newMessage["content"] = "<reasoning>\(reasoningContent)</reasoning>\n\(content)"
-                        newMessage.removeValue(forKey: "reasoning_content")
-                    }
-                    newChoice["message"] = newMessage
+        guard let choices = response["choices"] as? [[String: Any]] else { return }
+        var newChoices: [[String: Any]] = []
+        for choice in choices {
+            var newChoice = choice
+            if let message = choice["message"] as? [String: Any] {
+                var newMessage = message
+                if let reasoningContent = message["reasoning_content"] as? String {
+                    let content = message["content"] as? String ?? ""
+                    newMessage["content"] = "<reasoning>\(reasoningContent)</reasoning>\n\(content)"
+                    newMessage.removeValue(forKey: "reasoning_content")
                 }
-                newChoices.append(newChoice)
+                newChoice["message"] = newMessage
             }
-            response["choices"] = newChoices
+            newChoices.append(newChoice)
         }
+        response["choices"] = newChoices
     }
 
     func transformReasoningDetails(_ response: inout [String: Any]) {
-        // Transform reasoning_details to standard format
-        if let choices = response["choices"] as? [[String: Any]] {
-            var newChoices: [[String: Any]] = []
-            for choice in choices {
-                var newChoice = choice
-                if let message = choice["message"] as? [String: Any] {
-                    var newMessage = message
-                    if let reasoningDetails = message["reasoning_details"] as? [[String: Any]] {
-                        // Combine reasoning details into text
-                        let reasoningText = reasoningDetails.compactMap { $0["text"] as? String }.joined(separator: "\n")
-                        let content = message["content"] as? String ?? ""
-                        newMessage["content"] = "<reasoning>\(reasoningText)</reasoning>\n\(content)"
-                        newMessage.removeValue(forKey: "reasoning_details")
-                    }
-                    newChoice["message"] = newMessage
+        guard let choices = response["choices"] as? [[String: Any]] else { return }
+        var newChoices: [[String: Any]] = []
+        for choice in choices {
+            var newChoice = choice
+            if let message = choice["message"] as? [String: Any] {
+                var newMessage = message
+                if let reasoningDetails = message["reasoning_details"] as? [[String: Any]] {
+                    let reasoningText = reasoningDetails.compactMap { $0["text"] as? String }.joined(separator: "\n")
+                    let content = message["content"] as? String ?? ""
+                    newMessage["content"] = "<reasoning>\(reasoningText)</reasoning>\n\(content)"
+                    newMessage.removeValue(forKey: "reasoning_details")
                 }
-                newChoices.append(newChoice)
+                newChoice["message"] = newMessage
             }
-            response["choices"] = newChoices
+            newChoices.append(newChoice)
         }
+        response["choices"] = newChoices
     }
 }
 
@@ -301,19 +301,12 @@ public enum ReasoningPlatform: String, Codable, CaseIterable, Sendable {
             return .standard
         }
 
-        if url.contains("deepseek") {
-            return .deepseek
-        } else if url.contains("openrouter") {
-            return .openrouter
-        } else if url.contains("siliconflow") || url.contains("silicon-flow") {
-            return .siliconflow
-        } else if url.contains("kimi") || url.contains("moonshot") {
-            return .kimi
-        } else if url.contains("qwen") || url.contains("dashscope") {
-            return .qwen
-        } else if url.contains("minimax") {
-            return .minimax
-        }
+        if url.contains("deepseek") { return .deepseek }
+        if url.contains("openrouter") { return .openrouter }
+        if url.contains("siliconflow") || url.contains("silicon-flow") { return .siliconflow }
+        if url.contains("kimi") || url.contains("moonshot") { return .kimi }
+        if url.contains("qwen") || url.contains("dashscope") { return .qwen }
+        if url.contains("minimax") { return .minimax }
 
         return .standard
     }

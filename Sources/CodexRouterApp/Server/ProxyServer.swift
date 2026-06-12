@@ -12,11 +12,14 @@ public final class ProxyServer: ObservableObject {
 
     public init() {}
 
-    public func start(port: Int = 15721) async throws {
+    public func start(
+        port: Int = 15721,
+        settingsHandler: @escaping () async -> (Int, String, String)
+    ) async throws {
         self.port = port
 
         let router = Router()
-        Routes.configure(router: router)
+        Routes.configure(router: router, settingsHandler: settingsHandler)
 
         let responder = router.buildResponder()
         let app = Application(

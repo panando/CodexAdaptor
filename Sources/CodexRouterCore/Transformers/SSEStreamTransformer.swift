@@ -3,21 +3,7 @@ import NIOCore
 
 // MARK: - SSE Parser
 
-/// SSE event structure.
-public struct SSEEvent: Sendable {
-    public var id: String?
-    public var event: String?
-    public var data: String
-
-    public init(id: String? = nil, event: String? = nil, data: String) {
-        self.id = id
-        self.event = event
-        self.data = data
-    }
-}
-
 /// Parses Server-Sent Events from a byte stream.
-/// Handles both \n\n and \r\n\r\n delimiters.
 public struct SSEParser: Sendable {
     public init() {}
 
@@ -54,183 +40,181 @@ public struct SSEParser: Sendable {
     }
 }
 
-// MARK: - State
+/// SSE event structure.
+public struct SSEEvent: Sendable {
+    public var id: String?
+    public var event: String?
+    public var data: String
 
-/// Accumulated output item for response.completed.
-public struct OutputItemEntry: Sendable {
-    public let itemId: String
-    public let outputIndex: Int
-    public let type: String
-    public var text: String = ""
-    public var arguments: String = ""
-    public var callId: String = ""
-    public var name: String = ""
-
-    public func asJSON() -> [String: Any] {
-        var item: [String: Any] = ["id": itemId, "status": "completed", "type": type]
-        switch type {
-        case "reasoning":
-            item["summary"] = [[
-                "type": "summary_text",
-                "text": text
-            ]]
-        case "message":
-            item["role"] = "assistant"
-            item["content"] = [[
-                "type": "output_text",
-                "text": text,
-                "annotations": []
-            ]]
-        case "function_call":
-            item["call_id"] = callId
-            item["name"] = name
-            item["arguments"] = arguments
-        default:
-            break
-        }
-        return item
+    public init(id: String? = nil, event: String? = nil, data: String) {
+        self.id = id
+        self.event = event
+        self.data = data
     }
 }
 
-public struct ChatToResponsesState: Sendable {
-    public var responseStarted = false
-    public var responseId = "resp_codexrouter"
-    public var model = ""
-    public var nextOutputIndex = 0
-    public var textItemId: String?
-    public var textItemAdded = false
-    public var accumulatedText = ""
-    public var reasoningItemId: String?
-    public var reasoningItemAdded = false
-    public var reasoningPartAdded = false
-    public var accumulatedReasoning = ""
-    public var toolCalls: [Int: ToolCallState] = [:]
-    public var latestUsage: [String: Any]?
-    public var finishReason: String?
-    public var responseCompleted = false
-    public var hasError = false
-    /// Completed output items for the response.completed event
-    public var completedItems: [OutputItemEntry] = []
+// MARK: - Inline think state
 
-    public struct ToolCallState: Sendable {
-        public var itemId = ""
-        public var callId = ""
-        public var name = ""
-        public var arguments = ""
-        public var added = false
-        public var outputIndex = 0
-    }
+private enum InlineThinkMode {
+    case detecting
+    case reasoning
+    case text
+}
 
-    public init() {}
+// MARK: - Tool call state
+
+private struct ToolCallState {
+    var outputIndex: Int = 0
+    var itemId: String = ""
+    var callId: String = ""
+    var name: String = ""
+    var arguments: String = ""
+    var reasoningContent: String = ""
+    var added: Bool = false
+    var done: Bool = false
+}
+
+// MARK: - Main state
+
+/// Streaming state for Chat Completions → Responses SSE conversion.
+/// Follows cc-switch's ChatToResponsesState in streaming_codex_chat.rs.
+private struct StreamState {
+    var responseStarted = false
+    var completed = false
+    var responseId = "resp_codexrouter"
+    var model = ""
+    var createdAt: Int = 0
+    var nextOutputIndex = 0
+
+    // Text item
+    var textOutputIndex: Int = 0
+    var textItemId = ""
+    var accumulatedText = ""
+    var textAdded = false
+    var textDone = false
+
+    // Reasoning item
+    var reasoningOutputIndex: Int = 0
+    var reasoningItemId = ""
+    var accumulatedReasoning = ""
+    var reasoningAdded = false
+    var reasoningDone = false
+
+    // Inline think detection
+    var inlineThinkMode = InlineThinkMode.detecting
+    var inlineThinkBuffer = ""
+
+    // Tool calls
+    var tools: [Int: ToolCallState] = [:]
+
+    // Completed output items (outputIndex, item JSON)
+    var outputItems: [(Int, [String: Any])] = []
+
+    // Usage + finish
+    var latestUsage: [String: Any]?
+    var finishReason: String?
+
+    // Tool context for name restoration
+    var toolContext: CodexToolContext
 }
 
 // MARK: - Transformer
 
-/// Stateful stream transformer for Chat Completions to Responses API format.
-/// Event lifecycle follows cc-switch's streaming_codex_chat.rs.
+/// Stateful stream transformer for Chat Completions SSE → Responses API SSE.
+/// Follows cc-switch's streaming_codex_chat.rs exactly.
 public actor ChatToResponsesStreamTransformer {
-    private var state = ChatToResponsesState()
+    private var state: StreamState
     private let parser = SSEParser()
+    private let rectifier = ReasoningRectifier()
 
-    public init() {}
+    public init(toolContext: CodexToolContext = CodexToolContext()) {
+        self.state = StreamState(toolContext: toolContext)
+    }
 
-    /// Signal end of stream. Returns final events if response.completed not yet sent.
+    /// Signal end of upstream stream. Emits final completion or error events.
     public func finish() -> Data? {
-        guard !state.responseCompleted else { return nil }
-        finalizeAllOpenItems()
-        state.responseCompleted = true
+        guard !state.completed else { return nil }
         var events: [String] = []
-        if state.hasError {
-            events.append(createResponseFailedEvent())
+        events.append(contentsOf: ensureResponseStarted())
+        events.append(contentsOf: flushInlineThinkAtBoundary())
+        events.append(contentsOf: finalizeReasoning())
+        events.append(contentsOf: finalizeText())
+        events.append(contentsOf: finalizeTools())
+
+        if state.finishReason != nil || hasSubstantiveOutput() {
+            // Stream ended with output — complete
+            if state.finishReason == nil {
+                state.finishReason = "length"
+            }
+            let status = responseStatusFromFinishReason(state.finishReason)
+            events.append(createResponseCompletedEvent(status: status))
+            state.completed = true
         } else {
-            events.append(createResponseCompletedEvent())
+            // Stream ended without any output — failed
+            events.append(createResponseFailedEvent(
+                message: "Upstream Chat Completions stream ended before sending finish_reason",
+                code: "stream_truncated"
+            ))
+            state.completed = true
         }
-        events.append("data: [DONE]\n\n")
+
+        guard !events.isEmpty else { return nil }
         return events.joined().data(using: .utf8)
     }
 
+    /// Transform incoming SSE data. Returns transformed SSE text to forward to Codex.
     public func transform(_ data: Data) -> Data? {
-        let events = parser.parse(data)
+        let parsedEvents = parser.parse(data)
         var outputEvents: [String] = []
 
-        for event in events {
-            guard !event.data.isEmpty, event.data != "[DONE]" else {
-                if event.data == "[DONE]" {
-                    finalizeAllOpenItems()
-                    let completed = state.hasError
-                        ? createResponseFailedEvent()
-                        : createResponseCompletedEvent()
-                    outputEvents.append(completed)
-                    outputEvents.append("data: [DONE]\n\n")
-                    state.responseCompleted = true
+        for event in parsedEvents {
+            guard !event.data.isEmpty else { continue }
+
+            if event.data.trimmingCharacters(in: .whitespaces) == "[DONE]" {
+                // [DONE] from upstream — finalize
+                outputEvents.append(contentsOf: ensureResponseStarted())
+                outputEvents.append(contentsOf: flushInlineThinkAtBoundary())
+                outputEvents.append(contentsOf: finalizeReasoning())
+                outputEvents.append(contentsOf: finalizeText())
+                outputEvents.append(contentsOf: finalizeTools())
+                if !state.completed {
+                    let status = responseStatusFromFinishReason(state.finishReason)
+                    outputEvents.append(createResponseCompletedEvent(status: status))
+                    state.completed = true
                 }
                 continue
             }
 
             guard let jsonData = event.data.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-                continue
+                  let chunk = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
+            else { continue }
+
+            // Check for error in SSE
+            if event.event == "error" || chunk["error"] != nil {
+                outputEvents.append(contentsOf: ensureResponseStarted())
+                let (message, errorType) = extractChatSSEError(chunk)
+                outputEvents.append(createResponseFailedEvent(message: message, code: errorType))
+                state.completed = true
+                break
             }
 
-            // Check for upstream error in SSE data
-            if detectAndHandleError(json, events: &outputEvents) {
-                state.responseCompleted = true
-                outputEvents.append("data: [DONE]\n\n")
-                continue
-            }
-
-            let responsesEvents = processChatChunk(json)
-            outputEvents.append(contentsOf: responsesEvents)
+            outputEvents.append(contentsOf: handleChatChunk(chunk))
         }
 
         guard !outputEvents.isEmpty else { return nil }
         return outputEvents.joined().data(using: .utf8)
     }
 
-    /// Detect upstream error in SSE data and generate response.failed event.
-    /// Following cc-switch's error handling in streaming_codex_chat.rs.
-    private func detectAndHandleError(_ json: [String: Any], events: inout [String]) -> Bool {
-        // Direct error field
-        if let error = json["error"] as? [String: Any] {
-            let errType = error["type"] as? String ?? "server_error"
-            let message = error["message"] as? String ?? "Unknown error"
-            // Ensure response lifecycle events are sent before error
-            if !state.responseStarted {
-                state.responseStarted = true
-                events.append(createResponseCreatedEvent())
-                events.append(createResponseInProgressEvent())
-            }
-            events.append(createResponseFailedEvent(message: message, code: errType))
-            state.hasError = true
-            return true
-        }
-        // Error field that's a string
-        if let errMsg = json["error"] as? String {
-            if !state.responseStarted {
-                state.responseStarted = true
-                events.append(createResponseCreatedEvent())
-                events.append(createResponseInProgressEvent())
-            }
-            events.append(createResponseFailedEvent(message: errMsg, code: "server_error"))
-            state.hasError = true
-            return true
-        }
-        return false
-    }
+    // MARK: - Chunk handling
 
-    // MARK: - Chunk Processing
-
-    private func processChatChunk(_ chunk: [String: Any]) -> [String] {
+    private func handleChatChunk(_ chunk: [String: Any]) -> [String] {
         var events: [String] = []
 
         if let id = chunk["id"] as? String { state.responseId = "resp_\(id)" }
         if let model = chunk["model"] as? String, !model.isEmpty { state.model = model }
+        if let created = chunk["created"] as? Int { state.createdAt = created }
 
-        if !state.responseStarted {
-            state.responseStarted = true
-            events.append(createResponseCreatedEvent())
-            events.append(createResponseInProgressEvent())
-        }
+        events.append(contentsOf: ensureResponseStarted())
 
         if let usage = chunk["usage"] as? [String: Any] {
             state.latestUsage = convertUsage(usage)
@@ -239,392 +223,684 @@ public actor ChatToResponsesStreamTransformer {
         guard let choices = chunk["choices"] as? [[String: Any]],
               let choice = choices.first else { return events }
 
-        // Process delta content
+        // Process delta
         if let delta = choice["delta"] as? [String: Any] {
-            // Reasoning: check multiple formats (reasoning_content, reasoning string/object)
-            let reasoningText = extractReasoning(delta)
-            if let r = reasoningText, !r.isEmpty {
-                events.append(contentsOf: processReasoningDelta(r))
+            // Reasoning delta
+            if let reasoning = extractReasoning(delta), !reasoning.isEmpty {
+                events.append(contentsOf: pushReasoningDelta(reasoning))
+                appendReasoningToActiveTools(reasoning)
             }
 
-            // Text content
+            // Content delta (with inline think detection)
             if let content = delta["content"] as? String, !content.isEmpty {
-                events.append(contentsOf: processContentDelta(content))
+                events.append(contentsOf: pushContentDelta(content))
             }
 
-            // Tool calls
+            // Tool calls delta
             if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
-                events.append(contentsOf: processToolCallsDelta(toolCalls))
+                events.append(contentsOf: flushInlineThinkAtBoundary())
+                let reasoningForTools = currentReasoningText()
+                events.append(contentsOf: finalizeReasoning())
+                for toolCall in toolCalls {
+                    events.append(contentsOf: pushToolCallDelta(toolCall, reasoning: reasoningForTools))
+                }
             }
         }
 
-        // Finish reason — close all open items
-        if let fr = choice["finish_reason"] as? String {
-            state.finishReason = fr
-            finalizeAllOpenItems(events: &events)
+        if let finishReason = choice["finish_reason"] as? String {
+            state.finishReason = finishReason
         }
 
         return events
     }
 
-    /// Extract reasoning text from multiple possible formats (following cc-switch's codex_chat_common.rs).
-    private func extractReasoning(_ delta: [String: Any]) -> String? {
-        // reasoning_content string
-        if let rc = delta["reasoning_content"] as? String, !rc.isEmpty { return rc }
-        // reasoning string
-        if let r = delta["reasoning"] as? String, !r.isEmpty { return r }
-        // reasoning object (OpenRouter)
-        if let rObj = delta["reasoning"] as? [String: Any] {
-            return (rObj["content"] as? String) ?? (rObj["text"] as? String) ?? (rObj["summary"] as? String)
-        }
-        // reasoning_details array
-        if let details = delta["reasoning_details"] as? [[String: Any]] {
-            return details.compactMap { ($0["text"] as? String) ?? ($0["content"] as? String) }.joined()
-        }
-        return nil
-    }
+    // MARK: - Reasoning delta
 
-    // MARK: - Reasoning Delta
-
-    private func processReasoningDelta(_ delta: String) -> [String] {
+    private func pushReasoningDelta(_ delta: String) -> [String] {
         var events: [String] = []
 
-        if !state.reasoningItemAdded {
+        if !state.reasoningAdded {
+            let outputIndex = nextOutputIndex()
             let itemId = "rs_\(state.responseId)"
+            state.reasoningOutputIndex = outputIndex
             state.reasoningItemId = itemId
-            state.reasoningItemAdded = true
-            let oi = state.nextOutputIndex; state.nextOutputIndex += 1
-            // output_item.added for reasoning (with summary array)
-            events.append(createOutputItemAdded(itemId: itemId, outputIndex: oi, type: "reasoning", extra: ["summary": [] as [Any]]))
-        }
+            state.reasoningAdded = true
 
-        if !state.reasoningPartAdded {
-            state.reasoningPartAdded = true
-            let oi = state.nextOutputIndex - 1
-            // reasoning_summary_part.added
+            events.append(sseEvent("response.output_item.added", [
+                "type": "response.output_item.added",
+                "output_index": outputIndex,
+                "item": [
+                    "id": itemId,
+                    "type": "reasoning",
+                    "status": "in_progress",
+                    "summary": [] as [Any]
+                ]
+            ]))
             events.append(sseEvent("response.reasoning_summary_part.added", [
                 "type": "response.reasoning_summary_part.added",
-                "item_id": state.reasoningItemId!,
-                "output_index": oi,
+                "item_id": itemId,
+                "output_index": outputIndex,
                 "summary_index": 0,
                 "part": ["type": "summary_text", "text": ""]
             ]))
         }
 
-        // reasoning_summary_text.delta
-        if let itemId = state.reasoningItemId {
-            let oi = state.nextOutputIndex - 1
-            events.append(sseEvent("response.reasoning_summary_text.delta", [
-                "type": "response.reasoning_summary_text.delta",
-                "item_id": itemId,
-                "output_index": oi,
-                "delta": delta
-            ]))
-            state.accumulatedReasoning += delta
-        }
+        state.accumulatedReasoning += delta
+        let outputIndex = state.reasoningOutputIndex
+        events.append(sseEvent("response.reasoning_summary_text.delta", [
+            "type": "response.reasoning_summary_text.delta",
+            "item_id": state.reasoningItemId,
+            "output_index": outputIndex,
+            "summary_index": 0,
+            "delta": delta
+        ]))
 
         return events
     }
 
-    // MARK: - Content Delta
+    // MARK: - Content delta with inline think detection
 
-    private func processContentDelta(_ delta: String) -> [String] {
+    private func pushContentDelta(_ delta: String) -> [String] {
+        switch state.inlineThinkMode {
+        case .text:
+            var events = finalizeReasoning()
+            events.append(contentsOf: pushTextDelta(delta))
+            return events
+
+        case .detecting:
+            state.inlineThinkBuffer += delta
+            switch leadingThinkPrefixDecision(state.inlineThinkBuffer) {
+            case .needMore:
+                return []
+            case .reasoning:
+                state.inlineThinkMode = .reasoning
+                return drainCompleteInlineThink()
+            case .text:
+                state.inlineThinkMode = .text
+                let text = state.inlineThinkBuffer
+                state.inlineThinkBuffer = ""
+                var events = finalizeReasoning()
+                events.append(contentsOf: pushTextDelta(text))
+                return events
+            }
+
+        case .reasoning:
+            state.inlineThinkBuffer += delta
+            return drainCompleteInlineThink()
+        }
+    }
+
+    private func drainCompleteInlineThink() -> [String] {
+        guard let (reasoning, answer) = splitLeadingThinkBlock(state.inlineThinkBuffer) else {
+            return []
+        }
+        state.inlineThinkMode = .text
+        state.inlineThinkBuffer = ""
+
+        var events: [String] = []
+        if !reasoning.isEmpty {
+            events.append(contentsOf: pushReasoningDelta(reasoning))
+            events.append(contentsOf: finalizeReasoning())
+        }
+        if !answer.isEmpty {
+            events.append(contentsOf: pushTextDelta(answer))
+        }
+        return events
+    }
+
+    private func flushInlineThinkAtBoundary() -> [String] {
+        switch state.inlineThinkMode {
+        case .text:
+            return []
+        case .detecting:
+            state.inlineThinkMode = .text
+            let text = state.inlineThinkBuffer
+            state.inlineThinkBuffer = ""
+            if text.isEmpty { return [] }
+            var events = finalizeReasoning()
+            events.append(contentsOf: pushTextDelta(text))
+            return events
+        case .reasoning:
+            let buffered = state.inlineThinkBuffer
+            state.inlineThinkMode = .text
+            state.inlineThinkBuffer = ""
+
+            if let (reasoning, answer) = splitLeadingThinkBlock(buffered) {
+                var events: [String] = []
+                if !reasoning.isEmpty {
+                    events.append(contentsOf: pushReasoningDelta(reasoning))
+                    events.append(contentsOf: finalizeReasoning())
+                }
+                if !answer.isEmpty {
+                    events.append(contentsOf: pushTextDelta(answer))
+                }
+                return events
+            }
+
+            let reasoning = stripLeadingThinkOpenTag(buffered) ?? buffered
+            if reasoning.isEmpty { return [] }
+            var events = pushReasoningDelta(reasoning)
+            events.append(contentsOf: finalizeReasoning())
+            return events
+        }
+    }
+
+    // MARK: - Text delta
+
+    private func pushTextDelta(_ delta: String) -> [String] {
         var events: [String] = []
 
-        // Close reasoning first
-        closeReasoning(events: &events)
-
-        // Create text item if needed
-        if !state.textItemAdded {
-            let itemId = "text_\(state.responseId)"
+        if !state.textAdded {
+            let outputIndex = nextOutputIndex()
+            let itemId = "\(state.responseId)_msg"
+            state.textOutputIndex = outputIndex
             state.textItemId = itemId
-            state.textItemAdded = true
-            let oi = state.nextOutputIndex; state.nextOutputIndex += 1
-            // output_item.added for message with role and content array
-            events.append(createOutputItemAdded(itemId: itemId, outputIndex: oi, type: "message", extra: [
-                "role": "assistant",
-                "content": [] as [Any]
+            state.textAdded = true
+
+            events.append(sseEvent("response.output_item.added", [
+                "type": "response.output_item.added",
+                "output_index": outputIndex,
+                "item": [
+                    "id": itemId,
+                    "type": "message",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": [] as [Any]
+                ]
             ]))
-            // content_part.added
             events.append(sseEvent("response.content_part.added", [
                 "type": "response.content_part.added",
                 "item_id": itemId,
-                "output_index": oi,
+                "output_index": outputIndex,
                 "content_index": 0,
                 "part": ["type": "output_text", "text": "", "annotations": []]
             ]))
         }
 
-        // output_text.delta
-        if let itemId = state.textItemId {
-            let oi = state.nextOutputIndex - 1
-            events.append(sseEvent("response.output_text.delta", [
-                "type": "response.output_text.delta",
-                "item_id": itemId,
-                "output_index": oi,
-                "content_index": 0,
-                "delta": delta
-            ]))
-            state.accumulatedText += delta
-        }
+        state.accumulatedText += delta
+        let outputIndex = state.textOutputIndex
+        events.append(sseEvent("response.output_text.delta", [
+            "type": "response.output_text.delta",
+            "item_id": state.textItemId,
+            "output_index": outputIndex,
+            "content_index": 0,
+            "delta": delta
+        ]))
 
         return events
     }
 
-    private func closeReasoning(events: inout [String]) {
-        guard state.reasoningItemAdded, let itemId = state.reasoningItemId else { return }
-        let oi = state.nextOutputIndex - 1
-        // Close reasoning part
-        if state.reasoningPartAdded {
-            events.append(sseEvent("response.reasoning_summary_text.done", [
-                "type": "response.reasoning_summary_text.done",
-                "item_id": itemId,
-                "output_index": oi,
-                "summary_index": 0,
-                "text": state.accumulatedReasoning
-            ]))
-            events.append(sseEvent("response.reasoning_summary_part.done", [
-                "type": "response.reasoning_summary_part.done",
-                "item_id": itemId,
-                "output_index": oi,
-                "summary_index": 0
-            ]))
-            state.reasoningPartAdded = false
+    // MARK: - Tool call delta
+
+    private func pushToolCallDelta(_ toolCall: [String: Any], reasoning: String?) -> [String] {
+        let chatIndex = toolCall["index"] as? Int ?? 0
+        let idDelta = toolCall["id"] as? String
+        let function = toolCall["function"] as? [String: Any] ?? [:]
+        let nameDelta = function["name"] as? String
+        let argsDelta = function["arguments"] as? String ?? ""
+
+        var state_ = state.tools[chatIndex] ?? ToolCallState()
+
+        if let id = idDelta { state_.callId = id }
+        if let name = nameDelta { state_.name = name }
+        if !argsDelta.isEmpty { state_.arguments += argsDelta }
+        if state_.reasoningContent.isEmpty, let r = reasoning?.trimmingCharacters(in: .whitespaces), !r.isEmpty {
+            state_.reasoningContent = r
         }
-        // Close reasoning item
-        events.append(createOutputItemDone(itemId: itemId, outputIndex: oi, type: "reasoning"))
-        // Record completed reasoning item
-        trackCompletedItem(itemId: itemId, outputIndex: oi, type: "reasoning", text: state.accumulatedReasoning)
-        state.reasoningItemAdded = false
-        state.reasoningItemId = nil
-    }
 
-    // MARK: - Tool Calls Delta
-
-    private func processToolCallsDelta(_ toolCalls: [[String: Any]]) -> [String] {
         var events: [String] = []
+        var shouldAdd = false
+        var pendingArgs = ""
 
-        // Close text item first
-        closeTextItem(events: &events)
+        if !state_.added && (!state_.callId.isEmpty || !state_.name.isEmpty) {
+            shouldAdd = true
+            pendingArgs = state_.arguments
+        }
 
-        for tc in toolCalls {
-            guard let index = tc["index"] as? Int else { continue }
+        let isCustomTool = state.toolContext.isCustomToolChatName(state_.name)
 
-            if state.toolCalls[index] == nil {
-                var ts = ChatToResponsesState.ToolCallState()
-                ts.itemId = "fc_\(state.responseId)_\(index)"
-                ts.outputIndex = state.nextOutputIndex
-                state.nextOutputIndex += 1
-                state.toolCalls[index] = ts
-            }
+        if shouldAdd {
+            let assigned = nextOutputIndex()
+            state_.added = true
+            if state_.callId.isEmpty { state_.callId = "call_\(chatIndex)" }
+            if state_.name.isEmpty { state_.name = "unknown_tool" }
+            state_.outputIndex = assigned
+            state_.itemId = responseToolCallItemId(callId: state_.callId, chatName: state_.name)
 
-            var ts = state.toolCalls[index]!
+            let item = responseToolCallItem(
+                itemId: state_.itemId,
+                status: "in_progress",
+                callId: state_.callId,
+                chatName: state_.name,
+                arguments: "",
+                reasoning: state_.reasoningContent
+            )
 
-            if let function = tc["function"] as? [String: Any] {
-                if let n = function["name"] as? String { ts.name = n }
-                if let a = function["arguments"] as? String { ts.arguments += a }
-            }
-            if let cid = tc["id"] as? String { ts.callId = cid }
+            events.append(sseEvent("response.output_item.added", [
+                "type": "response.output_item.added",
+                "output_index": assigned,
+                "item": item
+            ]))
 
-            // Defer output_item.added until we have both id and name (cc-switch pattern)
-            if !ts.added, !ts.callId.isEmpty, !ts.name.isEmpty {
-                ts.added = true
-                events.append(createOutputItemAdded(itemId: ts.itemId, outputIndex: ts.outputIndex, type: "function_call", extra: [
-                    "call_id": ts.callId,
-                    "name": ts.name,
-                    "arguments": "",
-                    "status": "in_progress"
-                ]))
-                // Initial arguments delta if we already have some
-                if !ts.arguments.isEmpty {
-                    events.append(sseEvent("response.function_call_arguments.delta", [
-                        "type": "response.function_call_arguments.delta",
-                        "item_id": ts.itemId,
-                        "output_index": ts.outputIndex,
-                        "delta": ts.arguments
-                    ]))
-                    ts.arguments = ""
-                }
-            } else if ts.added, !ts.arguments.isEmpty {
-                // Subsequent arguments delta
+            if !pendingArgs.isEmpty && !isCustomTool {
                 events.append(sseEvent("response.function_call_arguments.delta", [
                     "type": "response.function_call_arguments.delta",
-                    "item_id": ts.itemId,
-                    "output_index": ts.outputIndex,
-                    "delta": ts.arguments
+                    "item_id": state_.itemId,
+                    "output_index": assigned,
+                    "delta": pendingArgs
                 ]))
-                ts.arguments = ""
             }
-
-            state.toolCalls[index] = ts
+        } else if !argsDelta.isEmpty && !isCustomTool {
+            events.append(sseEvent("response.function_call_arguments.delta", [
+                "type": "response.function_call_arguments.delta",
+                "item_id": state_.itemId,
+                "output_index": state_.outputIndex,
+                "delta": argsDelta
+            ]))
         }
 
+        state.tools[chatIndex] = state_
         return events
     }
 
-    private func closeTextItem(events: inout [String]) {
-        guard state.textItemAdded, let itemId = state.textItemId else { return }
-        let oi = state.nextOutputIndex - 1
-        // output_text.done
-        events.append(sseEvent("response.output_text.done", [
-            "type": "response.output_text.done",
-            "item_id": itemId,
-            "output_index": oi,
-            "content_index": 0,
-            "text": state.accumulatedText
-        ]))
-        // content_part.done
-        events.append(sseEvent("response.content_part.done", [
-            "type": "response.content_part.done",
-            "item_id": itemId,
-            "output_index": oi,
-            "content_index": 0
-        ]))
-        // output_item.done
-        events.append(createOutputItemDone(itemId: itemId, outputIndex: oi, type: "message"))
-        // Record completed text item
-        trackCompletedItem(itemId: itemId, outputIndex: oi, type: "message", text: state.accumulatedText)
-        state.textItemAdded = false
-        state.textItemId = nil
+    private func appendReasoningToActiveTools(_ delta: String) {
+        let delta = delta.trimmingCharacters(in: .whitespaces)
+        guard !delta.isEmpty else { return }
+        for key in state.tools.keys {
+            var ts = state.tools[key]!
+            if !ts.done {
+                if ts.reasoningContent.isEmpty {
+                    ts.reasoningContent = delta
+                } else {
+                    ts.reasoningContent += delta
+                }
+                state.tools[key] = ts
+            }
+        }
+    }
+
+    private func currentReasoningText() -> String? {
+        let text = state.accumulatedReasoning.trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? nil : text
     }
 
     // MARK: - Finalization
 
-    private func finalizeAllOpenItems(events: inout [String]) {
-        closeReasoning(events: &events)
-        closeTextItem(events: &events)
-        // Close any open tool calls with function_call_arguments.done + output_item.done
-        for (_, var ts) in state.toolCalls {
-            if ts.added {
+    private func finalizeReasoning() -> [String] {
+        guard state.reasoningAdded, !state.reasoningDone else { return [] }
+
+        let outputIndex = state.reasoningOutputIndex
+        let itemId = state.reasoningItemId
+        let text = state.accumulatedReasoning
+
+        let item: [String: Any] = [
+            "id": itemId,
+            "type": "reasoning",
+            "summary": [["type": "summary_text", "text": text]]
+        ]
+        state.outputItems.append((outputIndex, item))
+        state.reasoningDone = true
+
+        return [
+            sseEvent("response.reasoning_summary_text.done", [
+                "type": "response.reasoning_summary_text.done",
+                "item_id": itemId,
+                "output_index": outputIndex,
+                "summary_index": 0,
+                "text": text
+            ]),
+            sseEvent("response.reasoning_summary_part.done", [
+                "type": "response.reasoning_summary_part.done",
+                "item_id": itemId,
+                "output_index": outputIndex,
+                "summary_index": 0,
+                "part": ["type": "summary_text", "text": text]
+            ]),
+            sseEvent("response.output_item.done", [
+                "type": "response.output_item.done",
+                "output_index": outputIndex,
+                "item": item
+            ])
+        ]
+    }
+
+    private func finalizeText() -> [String] {
+        guard state.textAdded, !state.textDone else { return [] }
+
+        let outputIndex = state.textOutputIndex
+        let itemId = state.textItemId
+        let text = state.accumulatedText
+
+        let item: [String: Any] = [
+            "id": itemId,
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [["type": "output_text", "text": text, "annotations": []]]
+        ]
+        state.outputItems.append((outputIndex, item))
+        state.textDone = true
+
+        return [
+            sseEvent("response.output_text.done", [
+                "type": "response.output_text.done",
+                "item_id": itemId,
+                "output_index": outputIndex,
+                "content_index": 0,
+                "text": text
+            ]),
+            sseEvent("response.content_part.done", [
+                "type": "response.content_part.done",
+                "item_id": itemId,
+                "output_index": outputIndex,
+                "content_index": 0,
+                "part": ["type": "output_text", "text": text, "annotations": []]
+            ]),
+            sseEvent("response.output_item.done", [
+                "type": "response.output_item.done",
+                "output_index": outputIndex,
+                "item": item
+            ])
+        ]
+    }
+
+    private func finalizeTools() -> [String] {
+        var events: [String] = []
+        let keys = state.tools.keys.sorted()
+
+        for key in keys {
+            guard var ts = state.tools[key], !ts.done else { continue }
+
+            // If not added yet, add now (finalize)
+            if !ts.added {
+                ts.added = true
+                if ts.callId.isEmpty { ts.callId = "call_\(key)" }
+                if ts.name.isEmpty { ts.name = "unknown_tool" }
+                ts.outputIndex = nextOutputIndex()
+                ts.itemId = responseToolCallItemId(callId: ts.callId, chatName: ts.name)
+
+                let item = responseToolCallItem(
+                    itemId: ts.itemId,
+                    status: "in_progress",
+                    callId: ts.callId,
+                    chatName: ts.name,
+                    arguments: "",
+                    reasoning: ts.reasoningContent
+                )
+                events.append(sseEvent("response.output_item.added", [
+                    "type": "response.output_item.added",
+                    "output_index": ts.outputIndex,
+                    "item": item
+                ]))
+            }
+
+            let outputIndex = ts.outputIndex
+            let isCustomTool = state.toolContext.isCustomToolChatName(ts.name)
+            let arguments = canonicalizeToolArguments(ts.arguments)
+            let item = responseToolCallItem(
+                itemId: ts.itemId,
+                status: "completed",
+                callId: ts.callId,
+                chatName: ts.name,
+                arguments: arguments,
+                reasoning: ts.reasoningContent
+            )
+            ts.done = true
+            state.tools[key] = ts
+            state.outputItems.append((outputIndex, item))
+
+            if isCustomTool {
+                let input = customToolInputFromChatArguments(arguments)
+                if !input.isEmpty {
+                    events.append(sseEvent("response.custom_tool_call_input.delta", [
+                        "type": "response.custom_tool_call_input.delta",
+                        "item_id": ts.itemId,
+                        "output_index": outputIndex,
+                        "delta": input
+                    ]))
+                }
+                events.append(sseEvent("response.custom_tool_call_input.done", [
+                    "type": "response.custom_tool_call_input.done",
+                    "item_id": ts.itemId,
+                    "output_index": outputIndex,
+                    "input": input
+                ]))
+            } else {
                 events.append(sseEvent("response.function_call_arguments.done", [
                     "type": "response.function_call_arguments.done",
                     "item_id": ts.itemId,
-                    "output_index": ts.outputIndex,
-                    "arguments": ts.arguments
+                    "output_index": outputIndex,
+                    "arguments": arguments
                 ]))
-                events.append(createOutputItemDone(itemId: ts.itemId, outputIndex: ts.outputIndex, type: "function_call"))
-                trackCompletedItem(itemId: ts.itemId, outputIndex: ts.outputIndex, type: "function_call", arguments: ts.arguments, callId: ts.callId, name: ts.name)
-                ts.added = false
             }
+            events.append(sseEvent("response.output_item.done", [
+                "type": "response.output_item.done",
+                "output_index": outputIndex,
+                "item": item
+            ]))
         }
+
+        return events
     }
 
-    private func finalizeAllOpenItems() {
-        var dummy: [String] = []
-        finalizeAllOpenItems(events: &dummy)
+    private func hasSubstantiveOutput() -> Bool {
+        !state.accumulatedText.trimmingCharacters(in: .whitespaces).isEmpty
+            || !state.accumulatedReasoning.trimmingCharacters(in: .whitespaces).isEmpty
+            || !state.inlineThinkBuffer.trimmingCharacters(in: .whitespaces).isEmpty
+            || !state.outputItems.isEmpty
+            || state.tools.values.contains(where: { ts in
+                ts.added || !ts.callId.trimmingCharacters(in: .whitespaces).isEmpty
+                    || !ts.name.trimmingCharacters(in: .whitespaces).isEmpty
+                    || !ts.arguments.trimmingCharacters(in: .whitespaces).isEmpty
+                    || !ts.reasoningContent.trimmingCharacters(in: .whitespaces).isEmpty
+            })
     }
 
-    // MARK: - Event Builders
+    // MARK: - Event builders
 
-    private func createResponseCreatedEvent() -> String {
-        sseEvent("response.created", [
-            "type": "response.created",
-            "response": [
-                "id": state.responseId,
-                "object": "response",
-                "created_at": Int(Date().timeIntervalSince1970),
-                "status": "in_progress",
-                "model": state.model,
-                "output": []
-            ]
-        ])
+    private func ensureResponseStarted() -> [String] {
+        guard !state.responseStarted else { return [] }
+        state.responseStarted = true
+        let response = baseResponse(status: "in_progress", output: [])
+        return [
+            sseEvent("response.created", ["type": "response.created", "response": response]),
+            sseEvent("response.in_progress", ["type": "response.in_progress", "response": baseResponse(status: "in_progress", output: [])])
+        ]
     }
 
-    private func createResponseInProgressEvent() -> String {
-        sseEvent("response.in_progress", [
-            "type": "response.in_progress",
-            "response": [
-                "id": state.responseId,
-                "object": "response",
-                "status": "in_progress",
-                "model": state.model,
-                "output": []
-            ]
-        ])
-    }
-
-    private func createResponseFailedEvent(message: String = "Unknown error", code: String = "server_error") -> String {
-        sseEvent("response.failed", [
-            "type": "response.failed",
-            "response": [
-                "id": state.responseId,
-                "object": "response",
-                "status": "failed",
-                "model": state.model,
-                "output": []
-            ],
-            "error": [
-                "type": code,
-                "message": message
-            ]
-        ])
-    }
-
-    private func createResponseCompletedEvent() -> String {
-        var usage: [String: Any] = ["input_tokens": 0, "output_tokens": 0, "total_tokens": 0]
-        if let u = state.latestUsage { usage = u }
-
-        // Build output items from state, sorted by output_index
-        var items = state.completedItems
-        // Add any still-open items that weren't recorded
-        if state.reasoningItemAdded, let id = state.reasoningItemId {
-            items.append(OutputItemEntry(itemId: id, outputIndex: state.nextOutputIndex - 1, type: "reasoning", text: state.accumulatedReasoning))
+    private func createResponseCompletedEvent(status: String) -> String {
+        var response = baseResponse(status: status, output: completedOutputItems())
+        if status == "incomplete" {
+            response["incomplete_details"] = ["reason": "max_output_tokens"]
         }
-        if state.textItemAdded, let id = state.textItemId {
-            items.append(OutputItemEntry(itemId: id, outputIndex: state.nextOutputIndex - 1, type: "message", text: state.accumulatedText))
-        }
-        for (_, ts) in state.toolCalls where ts.added {
-            items.append(OutputItemEntry(itemId: ts.itemId, outputIndex: ts.outputIndex, type: "function_call", arguments: ts.arguments, callId: ts.callId, name: ts.name))
-        }
-        let outputItems = items.sorted { $0.outputIndex < $1.outputIndex }.map { $0.asJSON() }
-        NSLog("[CodexRouter] response.completed with \(outputItems.count) output items")
+        return sseEvent("response.completed", ["type": "response.completed", "response": response])
+    }
 
-        return sseEvent("response.completed", [
-            "type": "response.completed",
-            "response": [
-                "id": state.responseId,
-                "object": "response",
-                "created_at": Int(Date().timeIntervalSince1970),
-                "status": "completed",
-                "model": state.model,
-                "output": outputItems,
-                "usage": usage
+    private func createResponseFailedEvent(message: String, code: String) -> String {
+        var response = baseResponse(status: "failed", output: completedOutputItems())
+        response["error"] = ["message": message, "type": code]
+        return sseEvent("response.failed", ["type": "response.failed", "response": response])
+    }
+
+    private func baseResponse(status: String, output: [[String: Any]]) -> [String: Any] {
+        let usage = state.latestUsage ?? [
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "output_tokens_details": ["reasoning_tokens": 0]
+        ]
+        return [
+            "id": state.responseId,
+            "object": "response",
+            "created_at": state.createdAt > 0 ? state.createdAt : Int(Date().timeIntervalSince1970),
+            "status": status,
+            "model": state.model,
+            "output": output,
+            "usage": usage
+        ]
+    }
+
+    private func completedOutputItems() -> [[String: Any]] {
+        let sorted = state.outputItems.sorted { $0.0 < $1.0 }
+        return sorted.map { $0.1 }
+    }
+
+    private func nextOutputIndex() -> Int {
+        let index = state.nextOutputIndex
+        state.nextOutputIndex += 1
+        return index
+    }
+
+    // MARK: - Tool response item helpers
+
+    private func responseToolCallItemId(callId: String, chatName: String) -> String {
+        if state.toolContext.isCustomToolChatName(chatName) {
+            return "ctc_\(callId)"
+        }
+        return "fc_\(callId)"
+    }
+
+    private func responseToolCallItem(itemId: String, status: String, callId: String, chatName: String, arguments: String, reasoning: String) -> [String: Any] {
+        guard let spec = state.toolContext.lookupChatName(chatName) else {
+            // Unknown tool — emit as plain function_call
+            var item: [String: Any] = [
+                "id": itemId,
+                "type": "function_call",
+                "status": status,
+                "call_id": callId,
+                "name": chatName,
+                "arguments": arguments
             ]
-        ])
-    }
+            if !reasoning.isEmpty { item["reasoning_content"] = reasoning }
+            return item
+        }
 
-    private func createOutputItemAdded(itemId: String, outputIndex: Int, type: String, extra: [String: Any] = [:]) -> String {
-        var item: [String: Any] = ["id": itemId, "type": type, "status": "in_progress"]
-        for (k, v) in extra { item[k] = v }
-        return sseEvent("response.output_item.added", [
-            "type": "response.output_item.added",
-            "output_index": outputIndex,
-            "item": item
-        ])
-    }
+        if spec.kind == .toolSearch {
+            var item: [String: Any] = [
+                "type": "tool_search_call",
+                "call_id": callId,
+                "status": status,
+                "execution": "client",
+                "arguments": parseToolArgumentsObject(arguments)
+            ]
+            if !reasoning.isEmpty { item["reasoning_content"] = reasoning }
+            return item
+        }
 
-    private func createOutputItemDone(itemId: String, outputIndex: Int, type: String) -> String {
-        sseEvent("response.output_item.done", [
-            "type": "response.output_item.done",
-            "output_index": outputIndex,
-            "item": ["id": itemId, "type": type, "status": "completed"]
-        ])
-    }
+        if spec.kind == .custom {
+            var item: [String: Any] = [
+                "id": itemId,
+                "type": "custom_tool_call",
+                "status": status,
+                "call_id": callId,
+                "name": spec.name,
+                "input": customToolInputFromChatArguments(arguments)
+            ]
+            if !reasoning.isEmpty { item["reasoning_content"] = reasoning }
+            return item
+        }
 
-    /// Track a completed output item for the response.completed event.
-    /// Uses a separate array (not inout) to avoid Swift COW issues with nested struct mutation.
-    private func trackCompletedItem(itemId: String, outputIndex: Int, type: String, text: String = "", arguments: String = "", callId: String = "", name: String = "") {
-        var entry = OutputItemEntry(itemId: itemId, outputIndex: outputIndex, type: type)
-        entry.text = text
-        entry.arguments = arguments
-        entry.callId = callId
-        entry.name = name
-        var items = state.completedItems
-        items.append(entry)
-        state.completedItems = items
+        // function or namespace
+        var item: [String: Any] = [
+            "id": itemId,
+            "type": "function_call",
+            "status": status,
+            "call_id": callId,
+            "name": spec.name,
+            "arguments": arguments
+        ]
+        if let ns = spec.namespace, !ns.isEmpty { item["namespace"] = ns }
+        if !reasoning.isEmpty { item["reasoning_content"] = reasoning }
+        return item
     }
 
     // MARK: - Helpers
+
+    private func extractReasoning(_ delta: [String: Any]) -> String? {
+        return rectifier.extractReasoningText(delta)
+    }
+
+    private func extractChatSSEError(_ chunk: [String: Any]) -> (message: String, type: String) {
+        if let error = chunk["error"] as? [String: Any] {
+            let message = error["message"] as? String
+                ?? error["detail"] as? String
+                ?? "Unknown error"
+            let type = error["type"] as? String ?? error["code"] as? String ?? "server_error"
+            return (message, type)
+        }
+        if let message = chunk["error"] as? String {
+            return (message, "server_error")
+        }
+        return ("Unknown error", "server_error")
+    }
+
+    private func convertUsage(_ usage: [String: Any]) -> [String: Any] {
+        let input = usage["prompt_tokens"] as? Int ?? usage["input_tokens"] as? Int ?? 0
+        let output = usage["completion_tokens"] as? Int ?? usage["output_tokens"] as? Int ?? 0
+        let total = usage["total_tokens"] as? Int ?? (input + output)
+        var result: [String: Any] = [
+            "input_tokens": input,
+            "output_tokens": output,
+            "total_tokens": total
+        ]
+
+        // cached_tokens
+        if let details = usage["prompt_tokens_details"] as? [String: Any],
+           let cached = details["cached_tokens"] as? Int {
+            result["input_tokens_details"] = ["cached_tokens": cached]
+        } else if let details = usage["input_tokens_details"] as? [String: Any],
+                  let cached = details["cached_tokens"] as? Int {
+            result["input_tokens_details"] = ["cached_tokens": cached]
+        }
+
+        // output_tokens_details
+        if let details = usage["completion_tokens_details"] as? [String: Any] {
+            var d = details
+            if d["reasoning_tokens"] == nil { d["reasoning_tokens"] = 0 }
+            result["output_tokens_details"] = d
+        } else {
+            result["output_tokens_details"] = ["reasoning_tokens": 0]
+        }
+
+        if let cacheRead = usage["cache_read_input_tokens"] { result["cache_read_input_tokens"] = cacheRead }
+        if let cacheCreate = usage["cache_creation_input_tokens"] { result["cache_creation_input_tokens"] = cacheCreate }
+
+        return result
+    }
+
+    private func responseStatusFromFinishReason(_ reason: String?) -> String {
+        reason == "length" ? "incomplete" : "completed"
+    }
+
+    private func canonicalizeToolArguments(_ args: String) -> String {
+        guard let data = args.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data),
+              let reencoded = try? JSONSerialization.data(withJSONObject: json, options: .sortedKeys),
+              let str = String(data: reencoded, encoding: .utf8) else {
+            return args
+        }
+        return str
+    }
+
+    private func parseToolArgumentsObject(_ arguments: String) -> [String: Any] {
+        let trimmed = arguments.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return [:] }
+        guard let data = trimmed.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ["query": arguments]
+        }
+        return json
+    }
+
+    private func customToolInputFromChatArguments(_ arguments: String) -> String {
+        let trimmed = arguments.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return "" }
+        guard let data = trimmed.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return arguments
+        }
+        return json[customToolInputField] as? String ?? arguments
+    }
 
     private func sseEvent(_ event: String, _ data: [String: Any]) -> String {
         guard let jsonData = try? JSONSerialization.data(withJSONObject: data),
@@ -632,30 +908,52 @@ public actor ChatToResponsesStreamTransformer {
         return "event: \(event)\ndata: \(jsonStr)\n\n"
     }
 
-    private func convertUsage(_ usage: [String: Any]) -> [String: Any] {
-        let input = usage["prompt_tokens"] as? Int ?? 0
-        let output = usage["completion_tokens"] as? Int ?? 0
-        let total = usage["total_tokens"] as? Int ?? (input + output)
-        var result: [String: Any] = [
-            "input_tokens": input,
-            "output_tokens": output,
-            "total_tokens": total
-        ]
-        // Include reasoning_tokens if available
-        if let rt = usage["completion_tokens_details"] as? [String: Any],
-           let reasoningTokens = rt["reasoning_tokens"] as? Int {
-            result["output_tokens_details"] = ["reasoning_tokens": reasoningTokens]
+    // MARK: - Inline think helpers
+
+    private func leadingThinkPrefixDecision(_ buffer: String) -> ThinkPrefixDecision {
+        let trimmed = buffer.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+        if trimmed.isEmpty { return .needMore }
+        if trimmed.hasPrefix("<think>") { return .reasoning }
+        if "<think>".hasPrefix(trimmed) { return .needMore }
+        return .text
+    }
+
+    private func splitLeadingThinkBlock(_ text: String) -> (reasoning: String, answer: String)? {
+        let leadingWsLen = text.count - text.drop(while: { " \t".contains($0) }).count
+        let afterWs = String(text.dropFirst(leadingWsLen))
+        guard afterWs.hasPrefix("<think>") else { return nil }
+
+        let bodyStart = leadingWsLen + "<think>".count
+        guard let closeRange = text[text.index(text.startIndex, offsetBy: bodyStart)...].range(of: "</think>") else {
+            return nil
         }
-        return result
+        let closeStart = text.distance(from: text.startIndex, to: closeRange.lowerBound)
+        let answerStart = closeStart + "</think>".count
+
+        let reasoning = String(text[text.index(text.startIndex, offsetBy: bodyStart)..<text.index(text.startIndex, offsetBy: closeStart)]).trimmingCharacters(in: .whitespaces)
+        var answer = String(text[text.index(text.startIndex, offsetBy: answerStart)...])
+        answer = answer.trimmingCharacters(in: CharacterSet(charactersIn: "\r\n\t "))
+        return (reasoning, answer)
+    }
+
+    private func stripLeadingThinkOpenTag(_ text: String) -> String? {
+        let leadingWsLen = text.count - text.drop(while: { " \t".contains($0) }).count
+        let afterWs = String(text.dropFirst(leadingWsLen))
+        guard afterWs.hasPrefix("<think>") else { return nil }
+        return String(afterWs.dropFirst("<think>".count)).trimmingCharacters(in: .whitespaces)
     }
 }
 
-// MARK: - Deprecated (kept for compat)
+private enum ThinkPrefixDecision {
+    case needMore, reasoning, text
+}
+
+private let customToolInputField = "input"
+
+// MARK: - Deprecated compat
 
 public struct SSEStreamTransformer: Sendable {
-    private let parser: SSEParser
-    public init() { self.parser = SSEParser() }
-
+    public init() {}
     @available(*, deprecated, message: "Use ChatToResponsesStreamTransformer for stateful transformation")
     public func transformChatToResponsesStream(_ data: Data) -> Data? { nil }
 }

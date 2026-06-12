@@ -4,16 +4,16 @@ import CodexRouterCore
 /// View for managing model providers.
 public struct ProvidersView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var loc = LocalizationService.shared
     @State private var providers: [CodexModelProvider] = []
     @State private var currentProviderId: String?
     @State private var currentModel: String?
     @State private var isLoading = true
-    @State private var showingAddProvider = false
-    @State private var providerToEdit: CodexModelProvider?
     @State private var showingError = false
     @State private var errorMessage = ""
     @State private var showingSuccess = false
     @State private var successMessage = ""
+    @State private var providerToDelete: CodexModelProvider?
 
     public init(appState: AppState) {
         self.appState = appState
@@ -22,132 +22,124 @@ public struct ProvidersView: View {
     public var body: some View {
         VStack(spacing: 0) {
             // Header
-            HStack {
-                Image(systemName: "server.rack")
-                    .font(.title2)
-                    .foregroundColor(.blue)
-                Text("Providers")
-                    .font(.headline)
-                Spacer()
-                Button(action: { loadConfig() }) {
-                    Image(systemName: "arrow.clockwise")
+            VStack(spacing: 0) {
+                HStack {
+                    Label(L10n.providers, systemImage: "server.rack")
+                        .font(.headline)
+                    Spacer()
+                    Button(action: { loadConfig() }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(L10n.refresh)
+                    Button(action: { openProviderForm() }) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.accentColor)
+                    .help(L10n.addProvider)
                 }
-                .buttonStyle(.borderless)
+                .padding(.horizontal)
+                .padding(.top, 16)
+                .padding(.bottom, 10)
             }
-            .padding()
 
             Divider()
 
             if isLoading {
-                ProgressView("Loading...")
+                ProgressView(L10n.loading)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if providers.isEmpty {
-                VStack(spacing: 16) {
+                VStack(spacing: 12) {
                     Image(systemName: "server.rack")
-                        .font(.system(size: 48))
+                        .font(.system(size: 36))
                         .foregroundColor(.secondary)
-                    Text("No providers configured")
+                    Text(L10n.noProviders)
+                        .font(.body)
                         .foregroundColor(.secondary)
-                    Button("Add Provider") {
-                        showingAddProvider = true
-                    }
+                    Text(L10n.addProviderHint)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                // Current provider info
-                if let currentId = currentProviderId,
-                   let current = providers.first(where: { $0.id == currentId }) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Current Provider")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        HStack {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 8, height: 8)
-                            Text(current.name)
-                                .fontWeight(.medium)
-                            Spacer()
-                            if let model = currentModel {
-                                Text("Model: \(model)")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                            }
-                        }
-                        .padding()
-                        .background(Color.secondary.opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                    .padding([.horizontal, .top])
-                }
-
                 // Provider list
                 List {
                     ForEach(providers) { provider in
                         ProviderRowView(
                             provider: provider,
                             isCurrent: provider.id == currentProviderId,
-                            onSelect: {
-                                switchToProvider(provider)
-                            },
                             onEdit: {
-                                providerToEdit = provider
+                                openProviderForm(provider: provider)
                             },
                             onDelete: {
-                                deleteProvider(provider)
+                                providerToDelete = provider
                             }
                         )
+                        .padding(.vertical, 2)
                     }
                 }
+                .listStyle(.inset)
             }
 
-            Divider()
-
-            // Footer
-            HStack {
-                Button("Add Provider") {
-                    showingAddProvider = true
-                }
-                Spacer()
-                Button("Done") {
-                    NSApplication.shared.keyWindow?.close()
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding()
         }
-        .frame(width: 500, height: 450)
         .onAppear {
             loadConfig()
         }
-        .sheet(isPresented: $showingAddProvider) {
-            ProviderFormView(
-                appState: appState,
-                provider: nil,
-                onSave: { provider in
-                    saveProvider(provider)
-                }
-            )
-        }
-        .sheet(item: $providerToEdit) { provider in
-            ProviderFormView(
-                appState: appState,
-                provider: provider,
-                onSave: { updatedProvider in
-                    saveProvider(updatedProvider)
-                }
-            )
-        }
-        .alert("Error", isPresented: $showingError) {
-            Button("OK", role: .cancel) {}
+        .alert(L10n.error, isPresented: $showingError) {
+            Button(L10n.ok, role: .cancel) {}
         } message: {
             Text(errorMessage)
         }
-        .alert("Success", isPresented: $showingSuccess) {
-            Button("OK", role: .cancel) {}
+        .alert(L10n.success, isPresented: $showingSuccess) {
+            Button(L10n.ok, role: .cancel) {}
         } message: {
             Text(successMessage)
         }
+        .confirmationDialog(
+            L10n.deleteConfirmMsg(providerToDelete?.name ?? ""),
+            isPresented: Binding(
+                get: { providerToDelete != nil },
+                set: { if !$0 { providerToDelete = nil } }
+            )
+        ) {
+            Button(L10n.deleteBtn, role: .destructive) {
+                if let provider = providerToDelete {
+                    deleteProvider(provider)
+                    providerToDelete = nil
+                }
+            }
+            Button(L10n.cancel, role: .cancel) { providerToDelete = nil }
+        } message: {
+            Text(L10n.deleteCannotUndo)
+        }
+    }
+
+    private func openProviderForm(provider: CodexModelProvider? = nil) {
+        let w = provider != nil ? L10n.editProvider : L10n.addProvider
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 720),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered, defer: false
+        )
+        window.title = w
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.contentView = NSHostingView(rootView:
+            ProviderFormView(
+                appState: appState,
+                provider: provider,
+                onSave: { [weak window] updatedProvider in
+                    saveProvider(updatedProvider)
+                    window?.close()
+                },
+                onDismiss: { [weak window] in
+                    window?.close()
+                }
+            )
+        )
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func loadConfig() {
@@ -170,7 +162,7 @@ public struct ProvidersView: View {
         do {
             try CodexConfigService.shared.switchProvider(to: provider.id)
             currentProviderId = provider.id
-            successMessage = "Switched to \(provider.name)"
+            successMessage = "\(L10n.switchSuccess) \(provider.name)"
             showingSuccess = true
             loadConfig()
         } catch {
@@ -182,7 +174,7 @@ public struct ProvidersView: View {
     private func saveProvider(_ provider: CodexModelProvider) {
         do {
             try CodexConfigService.shared.saveProvider(provider)
-            successMessage = "Provider saved"
+            successMessage = L10n.saved
             showingSuccess = true
             loadConfig()
         } catch {
@@ -194,7 +186,7 @@ public struct ProvidersView: View {
     private func deleteProvider(_ provider: CodexModelProvider) {
         do {
             try CodexConfigService.shared.deleteProvider(id: provider.id)
-            successMessage = "Provider deleted"
+            successMessage = L10n.deleted
             showingSuccess = true
             loadConfig()
         } catch {
@@ -208,79 +200,71 @@ public struct ProvidersView: View {
 private struct ProviderRowView: View {
     let provider: CodexModelProvider
     let isCurrent: Bool
-    let onSelect: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            // Selection indicator
             Circle()
-                .fill(isCurrent ? Color.green : Color.clear)
+                .fill(isCurrent ? Color.green : Color.gray.opacity(0.35))
                 .frame(width: 8, height: 8)
-
             VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(provider.name)
-                        .font(.body)
-                    if provider.isUsingProxy {
-                        Image(systemName: "arrow.forward.circle")
-                            .foregroundColor(.blue)
-                            .help("Using proxy")
-                    }
-                }
-
+                Text(provider.name)
+                    .font(.body)
+                    .fontWeight(.medium)
                 Text(provider.baseURL)
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
-
-                Text("wire_api: \(provider.wireAPI)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
             }
-
             Spacer()
+            HStack(spacing: 8) {
+                Button(action: onEdit) {
+                    Label(L10n.edit, systemImage: "pencil")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(L10n.editProviderTooltip)
 
-            // Actions
-            Button(action: onEdit) {
-                Image(systemName: "pencil")
-            }
-            .buttonStyle(.borderless)
-
-            Button(action: onDelete) {
-                Image(systemName: "trash")
-                    .foregroundColor(.red)
-            }
-            .buttonStyle(.borderless)
-            .disabled(isCurrent)
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if !isCurrent {
-                onSelect()
+                Button(action: onDelete) {
+                    Label(L10n.deleteBtn, systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isCurrent)
+                .help(isCurrent ? L10n.cannotDeleteActive : L10n.deleteProviderTooltip)
             }
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        )
     }
 }
 
-/// Form for adding/editing a Codex provider.
+
+/// Form for adding/editing a Codex provider. Present in its own NSWindow.
 public struct ProviderFormView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var loc = LocalizationService.shared
     let provider: CodexModelProvider?
     let onSave: (CodexModelProvider) -> Void
-
-    @Environment(\.dismiss) private var dismiss
+    let onDismiss: () -> Void
 
     @State private var id: String = ""
     @State private var name: String = ""
     @State private var baseURL: String = ""
     @State private var upstreamWireAPI: String = "chat"
-    @State private var apiKey: String = ""
     @State private var bearerToken: String = ""
     @State private var modelCatalog: ModelCatalog = ModelCatalog(models: [])
     @State private var showAddModel: Bool = false
+    @State private var editingModelIndex: Int?
     @State private var newModelSlug: String = ""
     @State private var newModelDisplayName: String = ""
     @State private var newModelContextWindow: String = "128000"
@@ -288,231 +272,412 @@ public struct ProviderFormView: View {
     @State private var supportsThinking = false
     @State private var supportsEffort = false
     @State private var thinkingParam = "thinking"
+    @State private var effortParam = "reasoning_effort"
     @State private var effortValueMode = "standard"
     @State private var reasoningOutputFormat = "reasoning_content"
+    @State private var modelIndexToDelete: Int?
 
-    private var isEditing: Bool {
-        provider != nil
+    private var isEditing: Bool { provider != nil }
+
+    @ViewBuilder
+    private var modelEditorForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+
+            Text(editingModelIndex != nil ? L10n.editModel : L10n.addModel)
+                .font(.subheadline).fontWeight(.semibold)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.modelSlug)
+                    .font(.caption).foregroundColor(.secondary)
+                TextField(L10n.modelSlugPrompt, text: $newModelSlug)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.displayName)
+                    .font(.caption).foregroundColor(.secondary)
+                TextField(L10n.displayNamePrompt, text: $newModelDisplayName)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.contextWindow)
+                    .font(.caption).foregroundColor(.secondary)
+                TextField(L10n.contextWindowPrompt, text: $newModelContextWindow)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            HStack(spacing: 10) {
+                Button(L10n.cancel) {
+                    resetModelForm()
+                    showAddModel = false
+                }
+                .controlSize(.small)
+                Button(editingModelIndex != nil ? L10n.save : L10n.add) {
+                    guard !newModelSlug.isEmpty else { return }
+                    let entry = ModelCatalogEntry(
+                        model: newModelSlug,
+                        displayName: newModelDisplayName.isEmpty ? nil : newModelDisplayName,
+                        contextWindow: UInt64(newModelContextWindow)
+                    )
+                    if let idx = editingModelIndex, idx < modelCatalog.models.count {
+                        modelCatalog.models[idx] = entry
+                    } else {
+                        modelCatalog.models.append(entry)
+                    }
+                    resetModelForm()
+                    showAddModel = false
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(newModelSlug.isEmpty)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.blue.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+        .padding(.vertical, 4)
     }
 
-    public init(appState: AppState, provider: CodexModelProvider?, onSave: @escaping (CodexModelProvider) -> Void) {
+    private func resetModelForm() {
+        newModelSlug = ""
+        newModelDisplayName = ""
+        newModelContextWindow = "128000"
+        editingModelIndex = nil
+    }
+
+    public init(appState: AppState, provider: CodexModelProvider?, onSave: @escaping (CodexModelProvider) -> Void, onDismiss: @escaping () -> Void) {
         self.appState = appState
         self.provider = provider
         self.onSave = onSave
+        self.onDismiss = onDismiss
     }
 
     public var body: some View {
         VStack(spacing: 0) {
             // Header
-            HStack {
-                Text(isEditing ? "Edit Provider" : "Add Provider")
-                    .font(.headline)
+            HStack(spacing: 10) {
+                Image(systemName: isEditing ? "pencil.circle.fill" : "plus.circle.fill")
+                    .font(.title2)
+                    .foregroundColor(.blue)
+                Text(isEditing ? L10n.editProvider : L10n.addProvider)
+                    .font(.title3)
+                    .fontWeight(.semibold)
                 Spacer()
-                Button("Cancel") {
-                    dismiss()
-                }
+                Button(L10n.cancel) { onDismiss() }
+                    .keyboardShortcut(.escape, modifiers: [])
             }
-            .padding()
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
 
             Divider()
 
-            // Form
-            Form {
-                Section("Provider ID") {
-                    TextField("ID (e.g., openai, anthropic)", text: $id)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(isEditing)
-                }
+            // Scrollable form content
+            ScrollView {
+                Form {
+                    Section {
+                        TextField(L10n.providerName, text: $name, prompt: Text(L10n.providerNamePrompt))
+                            .textFieldStyle(.roundedBorder)
 
-                Section("Basic") {
-                    TextField("Name", text: $name)
-                        .textFieldStyle(.roundedBorder)
-
-                    TextField("Base URL", text: $baseURL)
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                }
-
-                Section("API Configuration") {
-                    Picker("Upstream Wire API", selection: $upstreamWireAPI) {
-                        Text("Chat Completions").tag("chat")
-                        Text("Responses API").tag("responses")
+                        TextField(L10n.baseURL, text: $baseURL, prompt: Text("https://api.deepseek.com"))
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                    } header: {
+                        Label(L10n.basicInfo, systemImage: "info.circle")
                     }
 
-                    SecureField("API Key (optional)", text: $apiKey)
-                        .textFieldStyle(.roundedBorder)
+                    Section {
+                        Picker(L10n.wireProtocol, selection: $upstreamWireAPI) {
+                            Text(L10n.chatCompletions).tag("chat")
+                            Text(L10n.responsesAPI).tag("responses")
+                        }
+                        .pickerStyle(.radioGroup)
 
-                    SecureField("Bearer Token (optional)", text: $bearerToken)
-                        .textFieldStyle(.roundedBorder)
-                }
+                        SecureField(L10n.apiKey, text: $bearerToken, prompt: Text(L10n.apiKeyPrompt))
+                            .textFieldStyle(.roundedBorder)
+                    } header: {
+                        Label(L10n.apiConfig, systemImage: "key")
+                    }
 
-                Section {
-                    Toggle("Show Advanced Reasoning Config", isOn: $showReasoningConfig)
-
-                    if showReasoningConfig {
-                        Toggle("Supports Thinking (Reasoning)", isOn: $supportsThinking)
-
-                        if supportsThinking {
-                            Picker("Thinking Parameter", selection: $thinkingParam) {
-                                Text("thinking").tag("thinking")
-                                Text("enable_thinking").tag("enable_thinking")
-                                Text("reasoning").tag("reasoning")
+                    Section {
+                        HStack {
+                            Toggle(L10n.overrideReasoning, isOn: $showReasoningConfig)
+                            Spacer()
+                            Button(L10n.autoDetect) {
+                                if !baseURL.isEmpty {
+                                    let inferred = ReasoningConfig.infer(name: name, baseURL: baseURL, model: "")
+                                    if let rc = inferred {
+                                        supportsThinking = rc.supportsThinking ?? false
+                                        supportsEffort = rc.supportsEffort ?? false
+                                        thinkingParam = rc.thinkingParam ?? "thinking"
+                                        effortParam = rc.effortParam ?? "reasoning_effort"
+                                        effortValueMode = rc.effortValueMode ?? "standard"
+                                        reasoningOutputFormat = rc.outputFormat ?? "reasoning_content"
+                                        showReasoningConfig = true
+                                    }
+                                }
                             }
+                            .disabled(baseURL.isEmpty)
+                            .controlSize(.small)
+                        }
 
-                            Picker("Effort Value Mode", selection: $effortValueMode) {
-                                Text("Standard (reasoning_effort)").tag("standard")
-                                Text("DeepSeek (thinking + reasoning_effort)").tag("deepseek")
-                                Text("OpenRouter (reasoning.effort)").tag("openrouter")
+                        if showReasoningConfig {
+                            VStack(alignment: .leading, spacing: 10) {
+                                // Thinking group
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Toggle(L10n.enableThinking, isOn: $supportsThinking)
+                                    Text(L10n.thinkingDesc)
+                                        .font(.caption).foregroundColor(.secondary)
+
+                                    if supportsThinking {
+                                        Picker(L10n.parameterName, selection: $thinkingParam) {
+                                            Text(L10n.thinkingDeepSeek).tag("thinking")
+                                            Text(L10n.thinkingSiliconFlow).tag("enable_thinking")
+                                            Text(L10n.thinkingMiniMax).tag("reasoning_split")
+                                            Text(L10n.thinkingNone).tag("none")
+                                        }
+                                    }
+                                }
+                                .padding(10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.secondary.opacity(0.06))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+                                )
+
+                                // Effort group
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Toggle(L10n.enableEffort, isOn: $supportsEffort)
+                                    Text(L10n.effortDesc)
+                                        .font(.caption).foregroundColor(.secondary)
+
+                                    if supportsEffort {
+                                        Picker(L10n.effortParam, selection: $effortParam) {
+                                            Text(L10n.reasoningEffort).tag("reasoning_effort")
+                                            Text(L10n.reasoningEffortNested).tag("reasoning.effort")
+                                        }
+
+                                        Picker(L10n.valueMapping, selection: $effortValueMode) {
+                                            Text(L10n.standardPassthrough).tag("standard")
+                                            Text(L10n.deepseekClamp).tag("deepseek")
+                                            Text(L10n.openrouterMap).tag("openrouter")
+                                            Text(L10n.lowHighBinary).tag("low_high")
+                                        }
+                                    }
+                                }
+                                .padding(10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.secondary.opacity(0.06))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+                                )
+
+                                // Output format group
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Picker(L10n.outputFormat, selection: $reasoningOutputFormat) {
+                                        Text(L10n.reasoningContent).tag("reasoning_content")
+                                        Text(L10n.reasoningDetails).tag("reasoning_details")
+                                        Text(L10n.reasoningGeneric).tag("reasoning")
+                                        Text(L10n.auto).tag("auto")
+                                    }
+                                    Text(L10n.outputFormatDesc)
+                                        .font(.caption).foregroundColor(.secondary)
+                                }
+                                .padding(10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.secondary.opacity(0.06))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+                                )
                             }
-
-                            Picker("Reasoning Output Format", selection: $reasoningOutputFormat) {
-                                Text("reasoning_content").tag("reasoning_content")
-                                Text("reasoning_details").tag("reasoning_details")
-                                Text("think_tags").tag("think_tags")
-                            }
-
-                            Toggle("Supports Effort Levels", isOn: $supportsEffort)
+                        }
+                    } header: {
+                        Label(L10n.reasoningConfig, systemImage: "brain.head.profile")
+                    } footer: {
+                        if !showReasoningConfig {
+                            Text(L10n.reasoningAutoDetectFooter)
                         }
                     }
-                } header: {
-                    Text("Reasoning Configuration")
-                }
 
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Model Catalog")
-                                .font(.headline)
-                            Spacer()
-                            Button(action: { showAddModel = true }) {
-                                Image(systemName: "plus.circle")
+                    Section {
+                        // Model list
+                        ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, model in
+                            HStack(spacing: 10) {
+                                Image(systemName: "cube")
+                                    .foregroundColor(.blue)
+                                    .font(.callout)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(model.displayName ?? model.model)
+                                        .font(.body).fontWeight(.medium)
+                                    Text(model.model)
+                                        .font(.caption).foregroundColor(.secondary)
+                                    if let ctx = model.contextWindow {
+                                        Text("\(ctx / 1000)K context")
+                                            .font(.caption2).foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                HStack(spacing: 8) {
+                                    Button {
+                                        newModelSlug = model.model
+                                        newModelDisplayName = model.displayName ?? ""
+                                        newModelContextWindow = model.contextWindow.map { String($0) } ?? "128000"
+                                        editingModelIndex = index
+                                        showAddModel = true
+                                    } label: {
+                                        Label(L10n.edit, systemImage: "pencil")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .help(L10n.editModel)
+
+                                    Button {
+                                        modelIndexToDelete = index
+                                    } label: {
+                                        Label(L10n.deleteBtn, systemImage: "trash")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .help(L10n.removeModel)
+                                }
+                            }
+                            .padding(.vertical, 3)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if !showAddModel || editingModelIndex != index {
+                                    newModelSlug = model.model
+                                    newModelDisplayName = model.displayName ?? ""
+                                    newModelContextWindow = model.contextWindow.map { String($0) } ?? "128000"
+                                    editingModelIndex = index
+                                    showAddModel = true
+                                }
+                            }
+
+                            // Inline form appears right below the edited row
+                            if showAddModel && editingModelIndex == index {
+                                modelEditorForm
+                            }
+                        }
+
+                        // Inline form for adding new model (appears after last row)
+                        if showAddModel && editingModelIndex == nil {
+                            modelEditorForm
+                        }
+
+                        if !showAddModel {
+                            Button {
+                                resetModelForm()
+                                editingModelIndex = nil
+                                showAddModel = true
+                            } label: {
+                                Label(L10n.addModel, systemImage: "plus.circle")
                             }
                             .buttonStyle(.borderless)
+                            .padding(.top, 4)
                         }
-
-                        if modelCatalog.models.isEmpty {
-                            Text("No models added")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                        } else {
-                            ForEach(modelCatalog.models) { model in
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(model.displayName ?? model.model)
-                                            .fontWeight(.medium)
-                                        Text("ID: \(model.model)")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                        if let ctx = model.contextWindow {
-                                            Text("Context: \(ctx / 1000)K tokens")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                        }
-                                    }
-                                    Spacer()
-                                    Button(action: {
-                                        withAnimation {
-                                            modelCatalog.models.removeAll { $0.id == model.id }
-                                        }
-                                    }) {
-                                        Image(systemName: "trash")
-                                            .foregroundColor(.red)
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                                .padding(.vertical, 4)
-                                Divider()
-                            }
-                        }
+                    } header: {
+                        Label(L10n.customModels, systemImage: "cube.box")
+                    } footer: {
+                        Text(L10n.modelFooter)
                     }
-                    .padding(.vertical, 4)
-                } header: {
-                    Text("Custom Models")
-                } footer: {
-                    Text("Add custom models to appear in Codex model selector")
                 }
+                .formStyle(.grouped)
+                .frame(minWidth: 600)
             }
-            .formStyle(.grouped)
 
             Divider()
 
             // Footer
             HStack {
                 Spacer()
-                Button("Save") {
-                    let reasoningConfig = showReasoningConfig && supportsThinking
-                        ? ReasoningConfig(
-                            supportsThinking: true,
-                            supportsEffort: supportsEffort ? true : nil,
-                            thinkingParam: thinkingParam,
-                            effortParam: nil,
-                            effortValueMode: effortValueMode,
-                            outputFormat: reasoningOutputFormat
-                        )
-                        : nil
-                    let newProvider = CodexModelProvider(
-                        id: id.lowercased().replacingOccurrences(of: " ", with: "-"),
-                        name: name.isEmpty ? id : name,
-                        baseURL: baseURL,
-                        wireAPI: "responses",
-                        upstreamWireAPI: upstreamWireAPI,
-                        apiKey: apiKey.isEmpty ? nil : apiKey,
-                        bearerToken: bearerToken.isEmpty ? nil : bearerToken,
-                        modelCatalog: modelCatalog.models.isEmpty ? nil : modelCatalog,
-                        reasoningConfig: reasoningConfig
-                    )
-                    onSave(newProvider)
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(id.isEmpty || baseURL.isEmpty)
+                Button(L10n.cancel) { onDismiss() }
+                Button(L10n.save) { doSave() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(name.isEmpty || baseURL.isEmpty)
+                    .keyboardShortcut(.return, modifiers: [.command])
             }
-            .padding()
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
         }
-        .frame(width: 500, height: 550)
-        .onAppear {
-            if let provider = provider {
-                id = provider.id
-                name = provider.name
-                baseURL = provider.baseURL
-                upstreamWireAPI = provider.upstreamWireAPI
-                apiKey = provider.apiKey ?? ""
-                bearerToken = provider.bearerToken ?? ""
-                modelCatalog = provider.modelCatalog ?? ModelCatalog(models: [])
-                if let rc = provider.reasoningConfig {
-                    supportsThinking = rc.supportsThinking ?? false
-                    supportsEffort = rc.supportsEffort ?? false
-                    thinkingParam = rc.thinkingParam ?? "thinking"
-                    effortValueMode = rc.effortValueMode ?? "standard"
-                    reasoningOutputFormat = rc.outputFormat ?? "reasoning_content"
-                    showReasoningConfig = true
+        .frame(minWidth: 640, minHeight: 640)
+        .onAppear { populateFromProvider() }
+        .confirmationDialog(
+            L10n.removeModelConfirm(modelIndexToDelete.map { modelCatalog.models[$0].displayName ?? modelCatalog.models[$0].model } ?? ""),
+            isPresented: Binding(
+                get: { modelIndexToDelete != nil },
+                set: { if !$0 { modelIndexToDelete = nil } }
+            )
+        ) {
+            Button(L10n.remove, role: .destructive) {
+                if let idx = modelIndexToDelete {
+                    modelCatalog.models.remove(at: idx)
+                    modelIndexToDelete = nil
                 }
             }
-        }
-        .alert("Add Model", isPresented: $showAddModel) {
-            TextField("Model ID (slug)", text: $newModelSlug)
-            TextField("Display Name", text: $newModelDisplayName)
-            TextField("Context Window", text: $newModelContextWindow)
-            Button("Cancel", role: .cancel) {
-                newModelSlug = ""
-                newModelDisplayName = ""
-                newModelContextWindow = "128000"
-            }
-            Button("Add") {
-                if !newModelSlug.isEmpty {
-                    let entry = ModelCatalogEntry(
-                        model: newModelSlug,
-                        displayName: newModelDisplayName.isEmpty ? nil : newModelDisplayName,
-                        contextWindow: UInt64(newModelContextWindow)
-                    )
-                    modelCatalog.models.append(entry)
-                }
-                newModelSlug = ""
-                newModelDisplayName = ""
-                newModelContextWindow = "128000"
-            }
+            Button(L10n.cancel, role: .cancel) { modelIndexToDelete = nil }
         } message: {
-            Text("Enter model details")
+            Text(L10n.removeModelDesc)
         }
+    }
+
+    private func populateFromProvider() {
+        guard let provider = provider else { return }
+        id = provider.id
+        name = provider.name
+        baseURL = provider.baseURL
+        upstreamWireAPI = provider.upstreamWireAPI
+        bearerToken = provider.bearerToken ?? ""
+        modelCatalog = provider.modelCatalog ?? ModelCatalog(models: [])
+        if let rc = provider.reasoningConfig {
+            supportsThinking = rc.supportsThinking ?? false
+            supportsEffort = rc.supportsEffort ?? false
+            thinkingParam = rc.thinkingParam ?? "thinking"
+            effortParam = rc.effortParam ?? "reasoning_effort"
+            effortValueMode = rc.effortValueMode ?? "standard"
+            reasoningOutputFormat = rc.outputFormat ?? "reasoning_content"
+            showReasoningConfig = true
+        }
+    }
+
+    private func doSave() {
+        let providerId = isEditing ? id : name.lowercased().replacingOccurrences(of: " ", with: "-")
+        let reasoningConfig = showReasoningConfig
+            ? ReasoningConfig(
+                supportsThinking: supportsThinking ? true : nil,
+                supportsEffort: supportsEffort ? true : nil,
+                thinkingParam: thinkingParam == "none" ? "none" : thinkingParam,
+                effortParam: supportsEffort ? effortParam : "none",
+                effortValueMode: supportsEffort ? effortValueMode : nil,
+                outputFormat: reasoningOutputFormat
+            )
+            : nil
+        let newProvider = CodexModelProvider(
+            id: providerId,
+            name: name.isEmpty ? providerId : name,
+            baseURL: baseURL,
+            upstreamWireAPI: upstreamWireAPI,
+            bearerToken: bearerToken.isEmpty ? nil : bearerToken,
+            modelCatalog: modelCatalog.models.isEmpty ? nil : modelCatalog,
+            reasoningConfig: reasoningConfig
+        )
+        onSave(newProvider)
+        onDismiss()
     }
 }

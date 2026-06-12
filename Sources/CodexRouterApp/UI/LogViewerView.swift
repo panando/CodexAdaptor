@@ -1,176 +1,113 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
-/// View for displaying application logs.
+/// Real-time log viewer backed by LogStore.
 public struct LogViewerView: View {
-    @State private var logEntries: [LogEntry] = []
+    @ObservedObject private var logStore = LogStore.shared
+    @ObservedObject private var loc = LocalizationService.shared
     @State private var autoScroll = true
     @State private var filterText = ""
-
-    private let logFilePath = "\(FileManager.default.homeDirectoryForCurrentUser.path)/.codex-router/logs/proxy.log"
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var copyConfirmation = false
 
     public init() {}
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Toolbar
             HStack {
-                TextField("Filter logs...", text: $filterText)
+                TextField(L10n.filter, text: $filterText)
                     .textFieldStyle(.roundedBorder)
+                Toggle(L10n.autoScroll, isOn: $autoScroll)
 
-                Toggle("Auto-scroll", isOn: $autoScroll)
+                Button(L10n.copyAll) { copyAll() }
 
-                Button("Clear") {
-                    logEntries.removeAll()
-                }
+                Button(L10n.exportBtn) { exportLogs() }
 
-                Button("Open File") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: logFilePath))
-                }
+                Button(L10n.clearBtn) { logStore.clear() }
             }
-            .padding()
+            .padding(8)
 
             Divider()
 
-            // Log content
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(filteredEntries) { entry in
-                            LogEntryRow(entry: entry)
-                                .id(entry.id)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                List(filteredEntries) { entry in
+                    LogEntryRow(entry: entry)
+                        .id(entry.id)
                 }
-                .onChange(of: logEntries.count) { _, _ in
-                    if autoScroll, let lastId = filteredEntries.last?.id {
-                        withAnimation {
-                            proxy.scrollTo(lastId, anchor: .bottom)
-                        }
+                .onChange(of: logStore.entries.count) { _, _ in
+                    if autoScroll, let last = filteredEntries.last?.id {
+                        proxy.scrollTo(last, anchor: .bottom)
                     }
                 }
             }
-            .background(Color(textBackgroundColor))
 
-            // Status bar
             HStack {
-                Text("\(filteredEntries.count) entries")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-                if FileManager.default.fileExists(atPath: logFilePath) {
-                    Text(logFilePath)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                if copyConfirmation {
+                    Text(L10n.copied)
+                        .font(.caption).foregroundColor(.green)
+                        .transition(.opacity)
                 }
+                Text("\(filteredEntries.count) \(L10n.entries)")
+                    .font(.caption).foregroundColor(.secondary)
+                Spacer()
             }
-            .padding(.horizontal)
-            .padding(.vertical, 4)
-            .background(Color.secondary.opacity(0.1))
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(Color.secondary.opacity(0.08))
         }
-        .frame(minWidth: 500, minHeight: 300)
-        .onAppear {
-            loadLogs()
-        }
-        .onReceive(timer) { _ in
-            loadLogs()
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var filteredEntries: [LogEntry] {
-        if filterText.isEmpty {
-            return logEntries
-        }
-        return logEntries.filter { $0.message.localizedCaseInsensitiveContains(filterText) }
+        if filterText.isEmpty { return logStore.entries }
+        return logStore.entries.filter { $0.message.localizedCaseInsensitiveContains(filterText) }
     }
 
-    private var textBackgroundColor: NSColor {
-        NSColor.textBackgroundColor
+    private func formatEntries(_ entries: [LogEntry]) -> String {
+        entries.map { "[\($0.timestamp)] [\($0.level.rawValue)] \($0.message)" }.joined(separator: "\n")
     }
 
-    private func loadLogs() {
-        guard FileManager.default.fileExists(atPath: logFilePath) else {
-            // If no log file, show sample entries
-            if logEntries.isEmpty {
-                logEntries = [
-                    LogEntry(level: .info, message: "CodexRouter started"),
-                    LogEntry(level: .info, message: "Server listening on port 15721"),
-                    LogEntry(level: .info, message: "Ready to accept connections"),
-                ]
-            }
-            return
-        }
-
-        guard let content = try? String(contentsOfFile: logFilePath, encoding: .utf8) else {
-            return
-        }
-
-        let lines = content.components(separatedBy: .newlines)
-        var entries: [LogEntry] = []
-
-        for line in lines where !line.isEmpty {
-            if let entry = parseLogLine(line) {
-                entries.append(entry)
-            }
-        }
-
-        // Keep last 1000 entries
-        logEntries = Array(entries.suffix(1000))
+    private func copyAll() {
+        let text = formatEntries(filteredEntries)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copyConfirmation = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copyConfirmation = false }
     }
 
-    private func parseLogLine(_ line: String) -> LogEntry? {
-        // Parse format: "2024-01-01T12:00:00Z [LEVEL] [Category] message"
-        let components = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
-        guard components.count >= 2 else { return nil }
-
-        let timestamp = String(components[0])
-        var level: DisplayLogLevel = .info
-        var message = line
-
-        if components.count >= 2 {
-            let levelStr = String(components[1])
-            if levelStr.contains("DEBUG") {
-                level = .debug
-            } else if levelStr.contains("INFO") {
-                level = .info
-            } else if levelStr.contains("WARN") {
-                level = .warning
-            } else if levelStr.contains("ERROR") {
-                level = .error
+    private func exportLogs() {
+        let panel = NSSavePanel()
+        panel.title = L10n.exportLogs
+        panel.nameFieldStringValue = "codexadaptor-logs-\(formattedDate()).txt"
+        panel.allowedContentTypes = [.plainText]
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                let text = formatEntries(logStore.entries)
+                try? text.write(to: url, atomically: true, encoding: .utf8)
             }
         }
+    }
 
-        if components.count >= 4 {
-            message = String(components[3])
-        }
-
-        return LogEntry(timestamp: timestamp, level: level, message: message)
+    private func formattedDate() -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyyMMdd-HHmmss"
+        return df.string(from: Date())
     }
 }
 
 /// A single log entry.
-struct LogEntry: Identifiable {
-    let id = UUID()
-    let timestamp: String
-    let level: DisplayLogLevel
-    let message: String
+public struct LogEntry: Identifiable, Sendable {
+    public let id = UUID()
+    public let timestamp: String
+    public let level: DisplayLogLevel
+    public let message: String
 
-    init(level: DisplayLogLevel, message: String) {
+    public init(level: DisplayLogLevel, message: String) {
         self.timestamp = ISO8601DateFormatter().string(from: Date())
-        self.level = level
-        self.message = message
-    }
-
-    init(timestamp: String, level: DisplayLogLevel, message: String) {
-        self.timestamp = timestamp
         self.level = level
         self.message = message
     }
 }
 
-/// Row view for a log entry.
 struct LogEntryRow: View {
     let entry: LogEntry
 
@@ -179,35 +116,31 @@ struct LogEntryRow: View {
             Text(entry.timestamp)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundColor(.secondary)
-                .frame(width: 100, alignment: .leading)
-
+                .frame(width: 90, alignment: .leading)
             Text(entry.level.rawValue)
-                .font(.system(.caption2, design: .monospaced))
-                .fontWeight(.bold)
-                .foregroundColor(colorForLevel(entry.level))
-                .frame(width: 50, alignment: .leading)
-
+                .font(.system(.caption2, design: .monospaced)).fontWeight(.bold)
+                .foregroundColor(entry.level.color)
+                .frame(width: 45, alignment: .leading)
             Text(entry.message)
                 .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.primary)
                 .textSelection(.enabled)
         }
-    }
-
-    private func colorForLevel(_ level: DisplayLogLevel) -> Color {
-        switch level {
-        case .debug: return .secondary
-        case .info: return .blue
-        case .warning: return .orange
-        case .error: return .red
-        }
+        .padding(.vertical, 1)
     }
 }
 
-/// Log level for display.
-enum DisplayLogLevel: String {
+public enum DisplayLogLevel: String, Sendable {
     case debug = "DEBUG"
-    case info = "INFO"
-    case warning = "WARN"
+    case info  = "INFO"
+    case warn  = "WARN"
     case error = "ERROR"
+
+    var color: Color {
+        switch self {
+        case .debug: return .secondary
+        case .info:  return .blue
+        case .warn:  return .orange
+        case .error: return .red
+        }
+    }
 }

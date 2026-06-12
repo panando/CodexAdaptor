@@ -3,20 +3,25 @@ import Hummingbird
 import NIOCore
 import CodexRouterCore
 
+/// Chat Completions fields to pass through from Responses request.
+private let extraChatPassthroughFields: Set<String> = [
+    "frequency_penalty", "logit_bias", "logprobs", "metadata", "n",
+    "parallel_tool_calls", "presence_penalty", "response_format", "seed",
+    "service_tier", "stop", "stream_options", "top_logprobs", "user"
+]
+
 /// Handles incoming proxy requests and forwards them to upstream providers.
 /// Uses CodexConfigService as the SINGLE source of truth for configuration.
 public actor RequestHandler {
     private let reasoningRectifier: ReasoningRectifier
     private let chatToResponsesTransformer: ChatToResponsesTransformer
     private let responsesToChatTransformer: ResponsesToChatTransformer
-    private let sseTransformer: SSEStreamTransformer
     private let httpClient: HTTPClient
 
     public init() {
         self.reasoningRectifier = ReasoningRectifier()
         self.chatToResponsesTransformer = ChatToResponsesTransformer()
         self.responsesToChatTransformer = ResponsesToChatTransformer()
-        self.sseTransformer = SSEStreamTransformer()
         self.httpClient = HTTPClient()
     }
 
@@ -25,7 +30,6 @@ public actor RequestHandler {
         request: Request,
         endpoint: ProxyEndpoint
     ) async throws -> Response {
-        // Get current upstream provider from Codex config (SINGLE SOURCE OF TRUTH)
         guard let provider = try CodexConfigService.shared.getCurrentUpstreamProvider() else {
             return Response(
                 status: .serviceUnavailable,
@@ -46,14 +50,12 @@ public actor RequestHandler {
         let upstreamURL = provider.baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             + endpoint.upstreamPath(usesChatCompletions: provider.usesChatCompletions)
 
-        NSLog("[CodexRouter] Upstream URL: \(upstreamURL)")
-        NSLog("[CodexRouter] usesChatCompletions: \(provider.usesChatCompletions)")
+        LogStore.shared.info("[CodexRouter] Upstream URL: \(upstreamURL)")
+        LogStore.shared.info("[CodexRouter] usesChatCompletions: \(provider.usesChatCompletions)")
 
         // Build headers
         var headers: [String: String] = [:]
         headers["Content-Type"] = "application/json"
-
-        // Add bearer token if configured
         if let token = provider.bearerToken {
             headers["Authorization"] = "Bearer \(token)"
         }
@@ -62,15 +64,9 @@ public actor RequestHandler {
         if endpoint == .models {
             do {
                 let (data, status) = try await httpClient.send(
-                    url: upstreamURL,
-                    method: .get,
-                    headers: headers,
-                    body: nil
+                    url: upstreamURL, method: .get, headers: headers, body: nil
                 )
-                return Response(
-                    status: status,
-                    body: .init(byteBuffer: ByteBuffer(data: data))
-                )
+                return Response(status: status, body: .init(byteBuffer: ByteBuffer(data: data)))
             } catch {
                 return Response(
                     status: .badGateway,
@@ -89,189 +85,176 @@ public actor RequestHandler {
         if bodyBuffer.readableBytes > 0 {
             requestBody = Data(buffer: bodyBuffer)
             if let bodyString = String(data: requestBody!, encoding: .utf8) {
-                NSLog("[CodexRouter] Request body: \(bodyString.prefix(500))")
+                LogStore.shared.info("[CodexRouter] Request body: \(bodyString.prefix(500))")
             }
         }
 
-        // Apply reasoning rectification and transform request if needed
+        // Parse JSON
         var requestJSON: [String: Any]?
         if let data = requestBody,
            var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let rc = provider.reasoningConfig {
-                reasoningRectifier.rectifyRequestWithConfig(&json, config: rc)
-            } else {
-                let platform = ReasoningPlatform.detect(from: provider.baseURL)
-                reasoningRectifier.rectifyRequest(&json, provider: nil, platform: platform)
+
+            // Build tool context from original Responses body (before Chat conversion)
+            let toolContext = CodexToolContext(responsesBody: json)
+
+            // Resolve reasoning config: explicit config takes priority, otherwise auto-infer
+            let modelName = json["model"] as? String ?? ""
+            let resolvedReasoningConfig = provider.reasoningConfig?.normalized()
+                ?? ReasoningConfig.infer(name: provider.name, baseURL: provider.baseURL, model: modelName)
+            if let rc = resolvedReasoningConfig {
+                LogStore.shared.info("[CodexRouter] Resolved reasoning config: thinking=\(rc.supportsThinking ?? false) effort=\(rc.supportsEffort ?? false) thinkingParam=\(rc.thinkingParam ?? "nil") effortParam=\(rc.effortParam ?? "nil") mode=\(rc.effortValueMode ?? "nil")")
             }
 
-            // Transform request from Responses API to Chat Completions format if needed
+            // Transform request from Responses to Chat format if needed (reasoning applied during conversion)
             if endpoint == .responses && provider.usesChatCompletions {
-                NSLog("[CodexRouter] Transforming Responses request to Chat Completions")
-                json = transformResponsesRequestToChat(json)
+                LogStore.shared.info("[CodexRouter] Transforming Responses request to Chat Completions")
+                json = transformResponsesRequestToChat(json, toolContext: toolContext, reasoningConfig: resolvedReasoningConfig, model: modelName)
             }
 
             requestJSON = json
             requestBody = try? JSONSerialization.data(withJSONObject: json)
             if let body = requestBody, let str = String(data: body, encoding: .utf8) {
-                NSLog("[CodexRouter] Transformed request body: \(str.prefix(500))")
+                LogStore.shared.info("[CodexRouter] Transformed request body: \(str.prefix(500))")
             }
-        }
 
-        // Determine if streaming
-        let isStreaming = requestJSON?["stream"] as? Bool ?? false
+            // Determine if streaming
+            let isStreaming = requestJSON?["stream"] as? Bool ?? false
 
-        // Send request
-        do {
-            if isStreaming {
-                return try await handleStreamingRequest(
-                    url: upstreamURL,
-                    headers: headers,
-                    body: requestBody,
-                    provider: provider,
-                    endpoint: endpoint
-                )
-            } else {
-                let (data, status) = try await httpClient.send(
-                    url: upstreamURL,
-                    method: .post,
-                    headers: headers,
-                    body: requestBody
-                )
-
-                // Transform response if needed
-                let transformedData = transformResponse(data: data, provider: provider, endpoint: endpoint)
-
+            // Send request
+            do {
+                if isStreaming {
+                    return try await handleStreamingRequest(
+                        url: upstreamURL, headers: headers, body: requestBody,
+                        provider: provider, endpoint: endpoint, toolContext: toolContext
+                    )
+                } else {
+                    let (data, status) = try await httpClient.send(
+                        url: upstreamURL, method: .post, headers: headers, body: requestBody
+                    )
+                    let transformedData = transformResponse(
+                        data: data, provider: provider, endpoint: endpoint,
+                        toolContext: toolContext, reasoningConfig: resolvedReasoningConfig
+                    )
+                    return Response(status: status, body: .init(byteBuffer: ByteBuffer(data: transformedData)))
+                }
+            } catch {
                 return Response(
-                    status: status,
-                    body: .init(byteBuffer: ByteBuffer(data: transformedData))
+                    status: .badGateway,
+                    body: .init(byteBuffer: ByteBuffer(string: #"{"error":"\#(error.localizedDescription)"}"#))
                 )
             }
-        } catch {
-            return Response(
-                status: .badGateway,
-                body: .init(byteBuffer: ByteBuffer(string: #"{"error":"\#(error.localizedDescription)"}"#))
-            )
+        } else {
+            // No JSON body — forward as-is
+            do {
+                let (data, status) = try await httpClient.send(
+                    url: upstreamURL, method: .post, headers: headers, body: requestBody
+                )
+                return Response(status: status, body: .init(byteBuffer: ByteBuffer(data: data)))
+            } catch {
+                return Response(
+                    status: .badGateway,
+                    body: .init(byteBuffer: ByteBuffer(string: #"{"error":"\#(error.localizedDescription)"}"#))
+                )
+            }
         }
     }
 
     /// Handle streaming request.
     private func handleStreamingRequest(
-        url: String,
-        headers: [String: String],
-        body: Data?,
-        provider: UpstreamProvider,
-        endpoint: ProxyEndpoint
+        url: String, headers: [String: String], body: Data?,
+        provider: UpstreamProvider, endpoint: ProxyEndpoint,
+        toolContext: CodexToolContext
     ) async throws -> Response {
-        // Determine if we need to transform the stream
         let needsTransformation = provider.usesChatCompletions && endpoint == .responses
+        LogStore.shared.info("[CodexRouter] Streaming request to \(url), needsTransformation: \(needsTransformation)")
 
-        NSLog("[CodexRouter] Streaming request to \(url), needsTransformation: \(needsTransformation)")
-
-        // Get the streaming response from the upstream
         let streamingResponse = try await httpClient.sendStreaming(
-            url: url,
-            method: .post,
-            headers: headers,
-            body: body
+            url: url, method: .post, headers: headers, body: body
         )
+        LogStore.shared.info("[CodexRouter] Upstream status: \(streamingResponse.status.code)")
 
-        NSLog("[CodexRouter] Upstream status: \(streamingResponse.status.code)")
-
-        // Build response headers
         var responseHeaders = HTTPFields()
         responseHeaders[.contentType] = "text/event-stream"
         responseHeaders[.cacheControl] = "no-cache"
         responseHeaders[.connection] = "keep-alive"
 
         if needsTransformation {
-            // Create a stateful transformer for this stream
-            let transformer = ChatToResponsesStreamTransformer()
-
+            let transformer = ChatToResponsesStreamTransformer(toolContext: toolContext)
             var isFirstChunk = true
 
-            // Create an async sequence that transforms and yields events,
-            // then appends final response.completed + [DONE] after the upstream stream ends.
             let eventSequence = AsyncStream<ByteBuffer> { continuation in
                 Task {
                     for await data in streamingResponse.events {
-                            if isFirstChunk {
-                                isFirstChunk = false
-                                if let raw = String(data: data, encoding: .utf8) {
-                                    NSLog("[CodexRouter] First raw upstream chunk: \(raw.prefix(500))")
-                                }
-                            }
-                            if let transformedData = await transformer.transform(data) {
-                                if let transformed = String(data: transformedData, encoding: .utf8) {
-                                    NSLog("[CodexRouter] Transformed output: \(transformed.prefix(500))")
-                                }
-                                continuation.yield(ByteBuffer(data: transformedData))
-                            } else if let raw = String(data: data, encoding: .utf8) {
-                                NSLog("[CodexRouter] Transform returned nil, raw upstream: \(raw.prefix(500))")
-                                continuation.yield(ByteBuffer(data: data))
+                        if isFirstChunk {
+                            isFirstChunk = false
+                            if let raw = String(data: data, encoding: .utf8) {
+                                LogStore.shared.info("[CodexRouter] First raw upstream chunk: \(raw.prefix(500))")
                             }
                         }
-                        // Stream ended — send completion events if not already sent
-                        if let finalData = await transformer.finish(),
-                           let final = String(data: finalData, encoding: .utf8) {
-                            NSLog("[CodexRouter] Final flush: \(final.prefix(200))")
-                            continuation.yield(ByteBuffer(data: finalData))
+                        if let transformedData = await transformer.transform(data) {
+                            if let transformed = String(data: transformedData, encoding: .utf8) {
+                                LogStore.shared.info("[CodexRouter] Transformed output: \(transformed.prefix(500))")
+                            }
+                            continuation.yield(ByteBuffer(data: transformedData))
+                        } else if let raw = String(data: data, encoding: .utf8) {
+                            LogStore.shared.info("[CodexRouter] Transform returned nil, raw upstream: \(raw.prefix(500))")
+                            continuation.yield(ByteBuffer(data: data))
                         }
+                    }
+                    // Stream ended — send completion events
+                    if let finalData = await transformer.finish(),
+                       let final = String(data: finalData, encoding: .utf8) {
+                        LogStore.shared.info("[CodexRouter] Final flush: \(final.prefix(200))")
+                        continuation.yield(ByteBuffer(data: finalData))
+                    }
                     continuation.finish()
                 }
             }
 
             let streamingBody = ResponseBody(asyncSequence: eventSequence)
-
-            return Response(
-                status: streamingResponse.status,
-                headers: responseHeaders,
-                body: streamingBody
-            )
+            return Response(status: streamingResponse.status, headers: responseHeaders, body: streamingBody)
         } else {
-            // No transformation needed - pass through
-            let eventSequence = streamingResponse.events.map { (data: Data) -> ByteBuffer in
-                return ByteBuffer(data: data)
-            }
-
+            let eventSequence = streamingResponse.events.map { ByteBuffer(data: $0) }
             let streamingBody = ResponseBody(asyncSequence: eventSequence)
-
-            return Response(
-                status: streamingResponse.status,
-                headers: responseHeaders,
-                body: streamingBody
-            )
+            return Response(status: streamingResponse.status, headers: responseHeaders, body: streamingBody)
         }
     }
 
     /// Transform response based on endpoint and provider.
-    private func transformResponse(data: Data, provider: UpstreamProvider, endpoint: ProxyEndpoint) -> Data {
-        guard var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return data
+    /// Includes error response normalization per cc-switch's chat_error_to_response_error.
+    private func transformResponse(
+        data: Data, provider: UpstreamProvider, endpoint: ProxyEndpoint,
+        toolContext: CodexToolContext, reasoningConfig: ReasoningConfig?
+    ) -> Data {
+        guard var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return data }
+
+        // If upstream returned an error, normalize to Responses API error format
+        if json["error"] != nil || json["type"] as? String == "error" {
+            return try! JSONSerialization.data(withJSONObject: chatErrorToResponseError(json))
         }
 
-        // Apply reasoning rectification to response
-        if let rc = provider.reasoningConfig {
+        // Apply response rectification (output format transformation)
+        if let rc = reasoningConfig {
             reasoningRectifier.rectifyResponseWithConfig(&json, config: rc)
         } else {
             let platform = ReasoningPlatform.detect(from: provider.baseURL)
-            reasoningRectifier.rectifyResponse(&json, provider: nil, platform: platform)
+            reasoningRectifier.rectifyResponse(&json, platform: platform)
         }
 
         // Transform format if needed
         if provider.usesChatCompletions && endpoint == .responses {
-            // Convert Chat Completions to Responses format
-            // Re-encode rectified json so reasoning changes are preserved
             do {
                 let rectifiedData = try JSONSerialization.data(withJSONObject: json)
                 let chatResponse = try JSONDecoder().decode(ChatCompletionResponse.self, from: rectifiedData)
-                let responsesAPI = chatToResponsesTransformer.transform(chatResponse: chatResponse)
+                let responsesAPI = chatToResponsesTransformer.transform(
+                    chatResponse: chatResponse, toolContext: toolContext
+                )
                 return try JSONEncoder().encode(responsesAPI)
             } catch {
-                NSLog("[CodexRouter] Failed to transform Chat to Responses: \(error)")
+                LogStore.shared.info("[CodexRouter] Failed to transform Chat to Responses: \(error)")
                 return data
             }
         } else if !provider.usesChatCompletions && endpoint == .chatCompletions {
-            // Convert Responses to Chat Completions format
             do {
                 let jsonString = String(data: data, encoding: .utf8) ?? "{}"
                 let chatResponse = try responsesToChatTransformer.transform(responsesJSON: jsonString)
@@ -284,194 +267,539 @@ public actor RequestHandler {
         return (try? JSONSerialization.data(withJSONObject: json)) ?? data
     }
 
+    // MARK: - Responses → Chat Completions transformation
+
     /// Transform Responses API request to Chat Completions format.
-    private func transformResponsesRequestToChat(_ json: [String: Any]) -> [String: Any] {
-        var result = json
+    /// Follows cc-switch's responses_to_chat_completions_with_reasoning exactly.
+    /// Reasoning is applied to the Chat-format request (not the original Responses format).
+    private func transformResponsesRequestToChat(
+        _ json: [String: Any],
+        toolContext: CodexToolContext,
+        reasoningConfig: ReasoningConfig?,
+        model: String
+    ) -> [String: Any] {
+        var result: [String: Any] = [:]
 
-        // Transform input to messages
-        if let input = json["input"] as? [[String: Any]] {
-            var messages: [[String: Any]] = []
+        // 1. Copy model
+        if let m = json["model"] { result["model"] = m }
 
-            for item in input {
-                var message: [String: Any] = [:]
+        // 2. Build messages from input + instructions
+        var messages: [[String: Any]] = []
 
-                if let role = item["role"] as? String {
-                    message["role"] = role
-                }
-
-                // Handle content
-                if let content = item["content"] as? String {
-                    message["content"] = content
-                } else if let contentArray = item["content"] as? [[String: Any]] {
-                    // Convert Responses API content block types to Chat Completions types
-                    let convertedContent = contentArray.compactMap { block -> [String: Any]? in
-                        guard let type = block["type"] as? String else { return nil }
-                        var newBlock = block
-                        if type == "input_text" || type == "output_text" {
-                            newBlock["type"] = "text"
-                        }
-                        return newBlock
-                    }
-                    message["content"] = convertedContent
-                }
-
-                // Copy tool calls and tool call ID
-                if let toolCalls = item["tool_calls"] as? [[String: Any]] {
-                    message["tool_calls"] = toolCalls
-                }
-                if let toolCallId = item["tool_call_id"] as? String {
-                    message["tool_call_id"] = toolCallId
-                }
-
-                if !message.isEmpty {
-                    messages.append(message)
-                }
-            }
-
-            result["messages"] = messages
-            result.removeValue(forKey: "input")
-        }
-
-        // Handle instructions as system message (prepended before other messages)
-        if let instructions = json["instructions"] as? String {
-            var messages = (result["messages"] as? [[String: Any]]) ?? []
-            messages.insert(["role": "system", "content": instructions], at: 0)
-            result["messages"] = messages
-            result.removeValue(forKey: "instructions")
-        }
-
-        // Handle developer role → system (most Chat APIs don't support "developer")
-        if let messages = result["messages"] as? [[String: Any]] {
-            result["messages"] = messages.map { msg in
-                var m = msg
-                if m["role"] as? String == "developer" { m["role"] = "system" }
-                return m
+        // instructions → system message
+        if let instructions = json["instructions"] {
+            let text = instructionText(instructions)
+            if !text.isEmpty {
+                messages.append(["role": "system", "content": text])
             }
         }
 
-        // Remove Responses API-only fields that upstream Chat APIs don't understand
-        result.removeValue(forKey: "client_metadata")
-        result.removeValue(forKey: "store")
-        result.removeValue(forKey: "include")
-        result.removeValue(forKey: "disable_response_storage")
-        result.removeValue(forKey: "model_reasoning_effort")
-        result.removeValue(forKey: "text")
-        result.removeValue(forKey: "reasoning")
-        result.removeValue(forKey: "thinking")
-        result.removeValue(forKey: "verbosity")
-        result.removeValue(forKey: "instructions")
-        result.removeValue(forKey: "prompt_cache_key")
+        // input → messages
+        if let input = json["input"] {
+            appendResponsesInputAsChatMessages(input, messages: &messages, toolContext: toolContext)
+        }
 
-        // Convert tools from Responses API format to Chat Completions format.
-        // Responses: {"type":"function","name":"...","description":"...","parameters":{...}}
-        // Chat: {"type":"function","function":{"name":"...","description":"...","parameters":{...}}}
-        // Following cc-switch's transform_codex_chat.rs:1095-1130
-        if let tools = result["tools"] as? [[String: Any]] {
-            result["tools"] = tools.flatMap { tool -> [[String: Any]] in
-                convertToolToChat(tool)
+        // Collapse system messages to head (MiniMax compat)
+        messages = collapseSystemMessagesToHead(messages)
+        result["messages"] = messages
+
+        // 3. Max tokens: max_output_tokens → max_tokens or max_completion_tokens for o-series
+        if let maxTokens = json["max_output_tokens"] {
+            if isOpenAIOseries(model: model) {
+                result["max_completion_tokens"] = maxTokens
+            } else {
+                result["max_tokens"] = maxTokens
             }
         }
+        if let maxTokens = json["max_tokens"] { result["max_tokens"] = maxTokens }
+        if let maxTokens = json["max_completion_tokens"] { result["max_completion_tokens"] = maxTokens }
 
-        // Rename max_output_tokens to max_tokens
-        if let maxOutputTokens = json["max_output_tokens"] {
-            result["max_tokens"] = maxOutputTokens
-            result.removeValue(forKey: "max_output_tokens")
+        // 4. temperature, top_p, stream
+        for key in ["temperature", "top_p", "stream"] {
+            if let value = json[key] { result[key] = value }
         }
+
+        // 5. Apply reasoning options (reads from original Responses body, writes to Chat request)
+        reasoningRectifier.applyReasoning(
+            chatRequest: &result,
+            responsesBody: json,
+            config: reasoningConfig,
+            model: model
+        )
+
+        // 6. Tools from tool context
+        let tools = toolContext.chatTools
+        if !tools.isEmpty {
+            result["tools"] = tools
+        }
+
+        // 7. tool_choice conversion
+        if let toolChoice = json["tool_choice"] {
+            result["tool_choice"] = responsesToolChoiceToChat(toolChoice, toolContext: toolContext)
+        }
+
+        // 8. Passthrough fields
+        for key in extraChatPassthroughFields {
+            if let value = json[key] { result[key] = value }
+        }
+
+        // 9. Drop tool_choice and parallel_tool_calls if no tools (strict upstreams reject this)
+        let hasTools = (result["tools"] as? [[String: Any]])?.isEmpty == false
+        if !hasTools {
+            result.removeValue(forKey: "tool_choice")
+            result.removeValue(forKey: "parallel_tool_calls")
+        }
+
+        // 10. Inject stream_options.include_usage for streaming (ensures usage/token tracking)
+        injectOpenAIStreamIncludeUsage(&result)
 
         return result
     }
 
-    /// Convert a Responses API tool to Chat Completions format.
-    /// Following cc-switch's transform_codex_chat.rs approach.
-    private func convertToolToChat(_ tool: [String: Any]) -> [[String: Any]] {
-        guard let type = tool["type"] as? String else { return [] }
+    // MARK: - Instruction text extraction
+
+    private func instructionText(_ value: Any) -> String {
+        if let text = value as? String { return text }
+        if let parts = value as? [[String: Any]] {
+            return parts.compactMap { part in
+                part["text"] as? String
+            }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        }
+        if let dict = value as? [String: Any], let text = dict["text"] as? String { return text }
+        return ""
+    }
+
+    // MARK: - Input → Messages conversion (follows cc-switch)
+
+    private func appendResponsesInputAsChatMessages(
+        _ input: Any,
+        messages: inout [[String: Any]],
+        toolContext: CodexToolContext
+    ) {
+        var pendingToolCalls: [[String: Any]] = []
+        var pendingReasoning: String?
+        var lastAssistantIndex: Int?
+
+        func flushPending() {
+            guard !pendingToolCalls.isEmpty else { return }
+            var message: [String: Any] = [
+                "role": "assistant",
+                "content": NSNull(),
+                "tool_calls": pendingToolCalls
+            ]
+            attachPendingReasoning(&message, &pendingReasoning)
+            lastAssistantIndex = messages.count
+            messages.append(message)
+            pendingToolCalls = []
+        }
+
+        if let text = input as? String {
+            messages.append(["role": "user", "content": text])
+        } else if let items = input as? [[String: Any]] {
+            for item in items {
+                let itemType = item["type"] as? String
+                switch itemType {
+                case "function_call":
+                    appendUniqueReasoning(&pendingReasoning, responsesItemReasoningText(item))
+                    pendingToolCalls.append(responsesFunctionCallToChatToolCall(item, toolContext: toolContext))
+                case "custom_tool_call":
+                    appendUniqueReasoning(&pendingReasoning, responsesItemReasoningText(item))
+                    pendingToolCalls.append(responsesCustomToolCallToChat(item))
+                case "tool_search_call":
+                    appendUniqueReasoning(&pendingReasoning, responsesItemReasoningText(item))
+                    pendingToolCalls.append(responsesToolSearchCallToChat(item))
+                case "function_call_output":
+                    flushPending()
+                    let callId = item["call_id"] as? String ?? ""
+                    let output = canonicalizeJSONString(item["output"] ?? "")
+                    messages.append(["role": "tool", "tool_call_id": callId, "content": output])
+                case "custom_tool_call_output", "tool_search_output":
+                    flushPending()
+                    let callId = item["call_id"] as? String ?? ""
+                    let output = canonicalizeJSONString(item)
+                    messages.append(["role": "tool", "tool_call_id": callId, "content": output])
+                case "reasoning":
+                    let reasoning = responsesReasoningItemText(item)
+                    if pendingToolCalls.isEmpty {
+                        if !attachReasoningToLastAssistant(&messages, lastAssistantIndex, reasoning) {
+                            appendReasoning(&pendingReasoning, reasoning)
+                        }
+                    } else {
+                        appendReasoning(&pendingReasoning, reasoning)
+                    }
+                case "input_text", "input_image", "input_file", "input_audio":
+                    flushPending()
+                    let role = responsesRoleToChatRole(item["role"] as? String)
+                    let message: [String: Any] = [
+                        "role": role,
+                        "content": responsesContentToChatContent(role, [item])
+                    ]
+                    if role == "assistant" {
+                        var msg = message
+                        attachPendingReasoning(&msg, &pendingReasoning)
+                        lastAssistantIndex = messages.count
+                        messages.append(msg)
+                    } else {
+                        pendingReasoning = nil
+                        lastAssistantIndex = messages.count
+                        messages.append(message)
+                    }
+                case "message", nil:
+                    // cc-switch: message type or missing type — convert via content handler
+                    flushPending()
+                    if item["role"] != nil || item["content"] != nil {
+                        let role = responsesRoleToChatRole(item["role"] as? String)
+                        let rawContent = item["content"]
+                        let chatContent = rawContent.map { responsesContentToChatContent(role, $0) } ?? NSNull()
+                        var message: [String: Any] = [
+                            "role": role,
+                            "content": chatContent
+                        ]
+                        if role == "assistant" {
+                            appendReasoning(&pendingReasoning, responsesItemReasoningText(item))
+                            attachPendingReasoning(&message, &pendingReasoning)
+                        } else {
+                            pendingReasoning = nil
+                        }
+                        lastAssistantIndex = messages.count
+                        messages.append(message)
+                    }
+                default:
+                    // Unknown type — still convert content (cc-switch fallback)
+                    flushPending()
+                    if item["role"] != nil || item["content"] != nil {
+                        let role = responsesRoleToChatRole(item["role"] as? String)
+                        let rawContent = item["content"]
+                        let chatContent = rawContent.map { responsesContentToChatContent(role, $0) } ?? NSNull()
+                        var message: [String: Any] = [
+                            "role": role,
+                            "content": chatContent
+                        ]
+                        if role == "assistant" {
+                            appendReasoning(&pendingReasoning, responsesItemReasoningText(item))
+                            attachPendingReasoning(&message, &pendingReasoning)
+                        } else {
+                            pendingReasoning = nil
+                        }
+                        lastAssistantIndex = messages.count
+                        messages.append(message)
+                    }
+                }
+            }
+        } else if let dict = input as? [String: Any] {
+            // Single item
+            let itemType = dict["type"] as? String
+            if itemType == "input_text" || itemType == "input_image" || itemType == "input_file" || dict["role"] != nil {
+                let role = responsesRoleToChatRole(dict["role"] as? String)
+                messages.append([
+                    "role": role,
+                    "content": responsesContentToChatContent(role, [dict])
+                ])
+            }
+        }
+
+        // Flush any remaining pending tool calls
+        flushPending()
+        // Backfill reasoning placeholders for tool call messages
+        backfillToolCallReasoningPlaceholders(&messages)
+    }
+
+    // MARK: - Reasoning helpers
+
+    private func appendReasoning(_ pending: inout String?, _ reasoning: String?) {
+        guard let r = reasoning?.trimmingCharacters(in: .whitespaces), !r.isEmpty else { return }
+        if var existing = pending, !existing.isEmpty {
+            existing += "\n\n\(r)"
+            pending = existing
+        } else {
+            pending = r
+        }
+    }
+
+    private func appendUniqueReasoning(_ pending: inout String?, _ reasoning: String?) {
+        guard let r = reasoning?.trimmingCharacters(in: .whitespaces), !r.isEmpty else { return }
+        if var existing = pending {
+            if existing.contains(r) { return }
+            if !existing.isEmpty { existing += "\n\n" }
+            existing += r
+            pending = existing
+        } else {
+            pending = r
+        }
+    }
+
+    private func attachPendingReasoning(_ message: inout [String: Any], _ pending: inout String?) {
+        guard let reasoning = pending, !reasoning.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        pending = nil
+        if let existing = message["reasoning_content"] as? String, !existing.isEmpty {
+            message["reasoning_content"] = "\(existing)\n\n\(reasoning)"
+        } else {
+            message["reasoning_content"] = reasoning
+        }
+    }
+
+    private func attachReasoningToLastAssistant(_ messages: inout [[String: Any]], _ index: Int?, _ reasoning: String?) -> Bool {
+        guard let r = reasoning?.trimmingCharacters(in: .whitespaces), !r.isEmpty else { return true }
+        guard let idx = index, idx < messages.count else { return false }
+        guard messages[idx]["role"] as? String == "assistant" else { return false }
+        if let existing = messages[idx]["reasoning_content"] as? String, !existing.isEmpty {
+            messages[idx]["reasoning_content"] = "\(existing)\n\n\(r)"
+        } else {
+            messages[idx]["reasoning_content"] = r
+        }
+        return true
+    }
+
+    private func backfillToolCallReasoningPlaceholders(_ messages: inout [[String: Any]]) {
+        for i in 0..<messages.count {
+            if messages[i]["role"] as? String == "assistant",
+               let toolCalls = messages[i]["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
+                let rc = messages[i]["reasoning_content"] as? String ?? ""
+                if rc.trimmingCharacters(in: .whitespaces).isEmpty {
+                    messages[i]["reasoning_content"] = "tool call"
+                }
+            }
+        }
+    }
+
+    private func responsesItemReasoningText(_ item: [String: Any]) -> String? {
+        reasoningRectifier.extractReasoningText(item)
+    }
+
+    private func responsesReasoningItemText(_ item: [String: Any]) -> String? {
+        // Extract from reasoning summary
+        if let summary = item["summary"] as? [[String: Any]] {
+            return summary.compactMap { ($0["text"] as? String) ?? ($0["content"] as? String) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+        }
+        return item["reasoning_content"] as? String
+            ?? item["content"] as? String
+            ?? item["text"] as? String
+    }
+
+    // MARK: - Role mapping
+
+    private func responsesRoleToChatRole(_ role: String?) -> String {
+        switch role {
+        case "system", "developer": return "system"
+        case "assistant": return "assistant"
+        case "tool": return "tool"
+        case "user", "latest_reminder": return "user"
+        default: return "user"
+        }
+    }
+
+    // MARK: - Content conversion
+
+    private func responsesContentToChatContent(_ role: String, _ content: Any) -> Any {
+        // cc-switch: if content is null or string, return as-is
+        if content is NSNull { return NSNull() }
+        if let str = content as? String { return str }
+
+        guard let parts = content as? [[String: Any]] else { return content }
+        var chatParts: [[String: Any]] = []
+        var hasNonTextPart = false
+
+        for part in parts {
+            let partType = part["type"] as? String ?? ""
+            switch partType {
+            case "input_text", "output_text", "text":
+                if let text = part["text"] as? String, !text.isEmpty {
+                    chatParts.append(["type": "text", "text": text])
+                }
+            case "refusal":
+                if let text = part["refusal"] as? String, !text.isEmpty {
+                    chatParts.append(["type": "text", "text": text])
+                }
+            case "input_image":
+                if let imageUrl = part["image_url"] {
+                    let url = imageUrl is [String: Any] ? imageUrl : ["url": imageUrl]
+                    chatParts.append(["type": "image_url", "image_url": url])
+                    hasNonTextPart = true
+                }
+            case "input_file":
+                var file: [String: Any] = [:]
+                let hasRef = part["file_id"] != nil || part["file_data"] != nil
+                guard hasRef else { continue }
+                for key in ["file_id", "file_data", "filename"] {
+                    if let v = part[key] { file[key] = v }
+                }
+                chatParts.append(["type": "file", "file": file])
+                hasNonTextPart = true
+            case "input_audio":
+                if let audio = part["input_audio"] {
+                    chatParts.append(["type": "input_audio", "input_audio": audio])
+                    hasNonTextPart = true
+                }
+            default: break
+            }
+        }
+
+        if !hasNonTextPart {
+            return chatParts.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        }
+        return chatParts
+    }
+
+    // MARK: - System message collapsing (MiniMax compat, cc-switch)
+
+    private func collapseSystemMessagesToHead(_ messages: [[String: Any]]) -> [[String: Any]] {
+        var systemChunks: [String] = []
+        var rest: [[String: Any]] = []
+
+        for msg in messages {
+            if msg["role"] as? String == "system",
+               let content = msg["content"] as? String {
+                let trimmed = content.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty { systemChunks.append(content) }
+                continue
+            }
+            rest.append(msg)
+        }
+
+        var out: [[String: Any]] = []
+        if !systemChunks.isEmpty {
+            out.append(["role": "system", "content": systemChunks.joined(separator: "\n\n")])
+        }
+        out.append(contentsOf: rest)
+        return out
+    }
+
+    // MARK: - Tool call conversion
+
+    private func responsesFunctionCallToChatToolCall(_ item: [String: Any], toolContext: CodexToolContext) -> [String: Any] {
+        let callId = item["call_id"] as? String ?? item["id"] as? String ?? ""
+        let name = item["name"] as? String ?? ""
+        let namespace = item["namespace"] as? String
+        let chatName = toolContext.chatNameForResponseFunction(name: name, namespace: namespace)
+        let arguments = canonicalizeToolArguments(item["arguments"] ?? "")
+
+        return [
+            "id": callId,
+            "type": "function",
+            "function": ["name": chatName, "arguments": arguments]
+        ]
+    }
+
+    private func responsesCustomToolCallToChat(_ item: [String: Any]) -> [String: Any] {
+        let callId = item["call_id"] as? String ?? item["id"] as? String ?? ""
+        let name = item["name"] as? String ?? ""
+        let input = item["input"] ?? ""
+
+        return [
+            "id": callId,
+            "type": "function",
+            "function": [
+                "name": name,
+                "arguments": canonicalizeJSONString(["input": input])
+            ]
+        ]
+    }
+
+    private func responsesToolSearchCallToChat(_ item: [String: Any]) -> [String: Any] {
+        let callId = item["call_id"] as? String ?? item["id"] as? String ?? ""
+        let arguments = canonicalizeJSONString(item["arguments"] ?? "")
+
+        return [
+            "id": callId,
+            "type": "function",
+            "function": ["name": "tool_search", "arguments": arguments]
+        ]
+    }
+
+    private func responsesToolChoiceToChat(_ toolChoice: Any, toolContext: CodexToolContext) -> Any {
+        guard let dict = toolChoice as? [String: Any],
+              let type = dict["type"] as? String else { return toolChoice }
 
         switch type {
         case "function":
-            // Already has function wrapper → pass through
-            if tool["function"] != nil { return [tool] }
-            // Flat Responses format → wrap in function
-            var t = tool
-            var function: [String: Any] = [:]
-            if let name = t.removeValue(forKey: "name") { function["name"] = name }
-            if let desc = t.removeValue(forKey: "description") { function["description"] = desc }
-            if let params = t.removeValue(forKey: "parameters") { function["parameters"] = params }
-            if let strict = t.removeValue(forKey: "strict") { function["strict"] = strict }
-            t["function"] = function
-            return [t]
-
-        case "custom":
-            // Custom tools become function tools with an "input" string param
-            let toolName = (tool["name"] as? String) ?? "custom_tool"
-            let toolDesc: String
-            if let data = try? JSONSerialization.data(withJSONObject: tool, options: .prettyPrinted),
-               let jsonStr = String(data: data, encoding: .utf8) {
-                toolDesc = "Custom tool: \(toolName)\n\nOriginal tool definition:\n\(jsonStr)"
-            } else {
-                toolDesc = "Custom tool: \(toolName)"
-            }
-            return [[
-                "type": "function",
-                "function": [
-                    "name": toolName,
-                    "description": toolDesc,
-                    "parameters": [
-                        "type": "object",
-                        "properties": [
-                            "input": [
-                                "type": "string",
-                                "description": "The input to pass to the custom tool"
-                            ]
-                        ],
-                        "required": ["input"]
-                    ]
-                ]
-            ]]
-
-        case "namespace":
-            // Flatten namespace: convert each child tool, prefixing names
-            guard let children = tool["tools"] as? [[String: Any]] else { return [] }
-            let namespace = (tool["name"] as? String) ?? ""
-            return children.flatMap { child -> [[String: Any]] in
-                let converted = convertToolToChat(child)
-                return converted.map { c in
-                    var ct = c
-                    if var funcObj = ct["function"] as? [String: Any],
-                       let name = funcObj["name"] as? String {
-                        let prefix = namespace.isEmpty ? "" : "\(namespace)__"
-                        funcObj["name"] = "\(prefix)\(name)"
-                        ct["function"] = funcObj
-                    }
-                    return ct
-                }
-            }
-
+            let name = dict["name"] as? String ?? ""
+            let namespace = dict["namespace"] as? String
+            let chatName = toolContext.chatNameForResponseFunction(name: name, namespace: namespace)
+            return ["type": "function", "function": ["name": chatName]]
         case "tool_search":
-            // Web search → function tool with query + limit params
-            return [[
-                "type": "function",
-                "function": [
-                    "name": "tool_search",
-                    "description": "Search the web for information",
-                    "parameters": [
-                        "type": "object",
-                        "properties": [
-                            "query": [
-                                "type": "string",
-                                "description": "The search query"
-                            ],
-                            "limit": [
-                                "type": "integer",
-                                "description": "Max number of results"
-                            ]
-                        ],
-                        "required": ["query"]
-                    ]
-                ]
-            ]]
-
+            return ["type": "function", "function": ["name": "tool_search"]]
+        case "custom":
+            let name = dict["name"] as? String ?? ""
+            return ["type": "function", "function": ["name": name]]
         default:
-            return []
+            return toolChoice
         }
+    }
+
+    // MARK: - Error normalization (cc-switch chat_error_to_response_error)
+
+    /// Normalize Chat API error to Responses API error format.
+    /// cc-switch's chat_error_to_response_error: standard OpenAI, MiniMax base_resp, plain text, detail field.
+    private func chatErrorToResponseError(_ value: [String: Any]) -> [String: Any] {
+        let errorObj = value["error"] as? [String: Any]
+        let source = errorObj ?? value
+
+        // Extract message (cc-switch priority: message → detail → status_msg → base_resp.status_msg → serialize)
+        var msg: String?
+        if let s = source["message"] as? String { msg = s }
+        else if let s = source["detail"] as? String { msg = s }
+        else if let s = source["status_msg"] as? String { msg = s }
+        else if let s = (source["base_resp"] as? [String: Any])?["status_msg"] as? String { msg = s }
+        else if let data = try? JSONSerialization.data(withJSONObject: source),
+                let s = String(data: data, encoding: .utf8) { msg = s }
+        let message = msg ?? "Upstream error"
+
+        let errorType: String
+        if let t = errorObj?["type"] as? String { errorType = t }
+        else if let t = source["type"] as? String { errorType = t }
+        else { errorType = "upstream_error" }
+
+        let code: Any = errorObj?["code"] ?? source["code"] ?? NSNull()
+        let param: Any = errorObj?["param"] ?? source["param"] ?? NSNull()
+
+        return ["error": ["message": message, "type": errorType, "code": code, "param": param]]
+    }
+
+    // MARK: - Helpers
+
+    private func isOpenAIOseries(model: String) -> Bool {
+        let m = model.lowercased()
+        guard m.count > 1, m.hasPrefix("o") else { return false }
+        return m[m.index(after: m.startIndex)].isNumber
+    }
+
+    private func injectOpenAIStreamIncludeUsage(_ result: inout [String: Any]) {
+        guard result["stream"] as? Bool == true else { return }
+        var streamOptions = result["stream_options"] as? [String: Any] ?? [:]
+        streamOptions["include_usage"] = true
+        result["stream_options"] = streamOptions
+    }
+
+    private func canonicalizeJSONString(_ value: Any) -> String {
+        if let str = value as? String {
+            // Try to parse and re-encode for canonical form
+            if let data = str.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data),
+               let reencoded = try? JSONSerialization.data(withJSONObject: json, options: .sortedKeys),
+               let canon = String(data: reencoded, encoding: .utf8) {
+                return canon
+            }
+            return str
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: value, options: .sortedKeys),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "{}"
+    }
+
+    private func canonicalizeToolArguments(_ value: Any) -> String {
+        if let str = value as? String {
+            if let data = str.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data),
+               let reencoded = try? JSONSerialization.data(withJSONObject: json, options: .sortedKeys),
+               let canon = String(data: reencoded, encoding: .utf8) {
+                return canon
+            }
+            return str
+        }
+        return canonicalizeJSONString(value)
     }
 }

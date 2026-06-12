@@ -5,17 +5,20 @@ public struct ChatMessage: Codable, Equatable {
     public var role: String
     public var content: String?
     public var toolCalls: [ToolCall]?
+    public var reasoningContent: String?
 
     enum CodingKeys: String, CodingKey {
         case role
         case content
         case toolCalls = "tool_calls"
+        case reasoningContent = "reasoning_content"
     }
 
-    public init(role: String, content: String? = nil, toolCalls: [ToolCall]? = nil) {
+    public init(role: String, content: String? = nil, toolCalls: [ToolCall]? = nil, reasoningContent: String? = nil) {
         self.role = role
         self.content = content
         self.toolCalls = toolCalls
+        self.reasoningContent = reasoningContent
     }
 }
 

@@ -1,10 +1,15 @@
 import Foundation
+import TOMLKit
 import CodexRouterCore
 
 /// Service for managing Codex configuration.
-/// config.toml: only Codex-native fields (base_url→proxy, wire_api, model_provider, model, model_catalog_json, experimental_bearer_token)
-/// providers.json: proxy-internal data (upstream_base_url, upstream_wire_api, reasoning_config, model_catalog)
-/// Follows EchoBird's pattern: proxy config lives in a separate file, config.toml stays clean.
+/// Follows EchoBird's pattern exactly:
+///   config.toml  — Codex-native fields only (base_url→proxy, wire_api, model_provider, model, bearer_token)
+///   providers.json — proxy-internal metadata (upstream URL, reasoning config, model catalog)
+///
+/// All config.toml operations use TOMLKit for proper parse→modify→serialize round-trips,
+/// guaranteeing that plugin/mcp/tool sections added by Codex or third-party tools are never
+/// corrupted or stripped.
 public class CodexConfigService {
     public static let shared = CodexConfigService()
 
@@ -12,7 +17,7 @@ public class CodexConfigService {
     private let configPath: String
     private let providersPath: String
     private let modelsCachePath: String
-    private let backupSuffix = ".bak.codexrouter"
+    private let backupSuffix = ".bak.codexadaptor"
 
     private static let templateSlug = "gpt-5.5"
 
@@ -30,6 +35,38 @@ public class CodexConfigService {
 
     public var configExists: Bool {
         FileManager.default.fileExists(atPath: configPath)
+    }
+
+    // MARK: - TOML Parsing
+
+    /// Parse config.toml into a TOMLTable. Returns nil if file doesn't exist.
+    private func parseConfig() throws -> TOMLTable? {
+        guard FileManager.default.fileExists(atPath: configPath) else { return nil }
+        let content = try String(contentsOfFile: configPath, encoding: .utf8)
+        return try TOMLTable(string: content)
+    }
+
+    /// Parse or create default config.
+    private func parseOrCreateConfig() throws -> TOMLTable {
+        if let table = try parseConfig() { return table }
+        return try TOMLTable(string: defaultConfigTOML())
+    }
+
+    /// Serialize a TOMLTable back to TOML text and write to config.toml.
+    /// Always backs up the existing file first.
+    private func writeConfig(_ table: TOMLTable) throws {
+        let toml = table.convert(to: .toml)
+
+        // Backup first
+        if FileManager.default.fileExists(atPath: configPath) {
+            let backupPath = configPath + backupSuffix
+            let existing = try String(contentsOfFile: configPath, encoding: .utf8)
+            try existing.write(toFile: backupPath, atomically: true, encoding: .utf8)
+        }
+
+        let dir = (configPath as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try toml.write(toFile: configPath, atomically: true, encoding: .utf8)
     }
 
     // MARK: - Providers JSON (proxy-internal data)
@@ -52,26 +89,18 @@ public class CodexConfigService {
 
     // MARK: - Reading Upstream Provider (for proxy)
 
-    /// Get current upstream provider config. Reads model_provider from config.toml, metadata from providers.json.
+    /// Get current upstream provider config from config.toml + providers.json.
     public func getCurrentUpstreamProvider() throws -> UpstreamProvider? {
-        guard FileManager.default.fileExists(atPath: configPath) else {
-            return nil
-        }
-
-        let content = try String(contentsOfFile: configPath, encoding: .utf8)
-        guard let providerId = extractValue(from: content, key: "model_provider") else {
-            return nil
-        }
+        guard let table = try parseConfig() else { return nil }
+        guard let providerId = table["model_provider"]?.string else { return nil }
 
         let store = readProviderStore()
         guard let meta = store.providers[providerId],
-              let upstreamURL = meta.upstreamBaseURL else {
-            return nil
-        }
+              let upstreamURL = meta.upstreamBaseURL else { return nil }
 
-        let sectionContent = providerSectionContent(providerId: providerId, configContent: content)
-        let name = sectionContent.flatMap { extractValue(from: $0, key: "name") } ?? providerId
-        let bearerToken = sectionContent.flatMap { extractValue(from: $0, key: "experimental_bearer_token") }
+        let providerTable = table["model_providers"]?.table?[providerId]?.table
+        let name = providerTable?["name"]?.string ?? providerId
+        let bearerToken = providerTable?["experimental_bearer_token"]?.string
         let usesChatCompletions = (meta.upstreamWireAPI ?? "chat").lowercased() == "chat"
 
         return UpstreamProvider(
@@ -86,52 +115,46 @@ public class CodexConfigService {
 
     // MARK: - Reading Providers (for UI)
 
-    /// Get all model providers enriched with metadata from providers.json.
+    /// Get all model providers from config.toml + providers.json.
     public func getModelProviders() throws -> [CodexModelProvider] {
+        guard let table = try parseConfig() else { return [] }
+
+        let modelProviders = table["model_providers"]?.table ?? [:]
+        let store = readProviderStore()
         var providers: [CodexModelProvider] = []
 
-        let configSections = try readConfigProviderSections()
-        let store = readProviderStore()
-
-        for (providerId, sectionContent) in configSections {
+        for (providerId, value) in modelProviders {
+            guard let section = value.table else { continue }
             let meta = store.providers[providerId]
-            let name = extractValue(from: sectionContent, key: "name") ?? providerId
-            let wireAPI = extractValue(from: sectionContent, key: "wire_api") ?? "responses"
-            let apiKey = extractValue(from: sectionContent, key: "api_key")
-            let bearerToken = extractValue(from: sectionContent, key: "experimental_bearer_token")
+            let name = section["name"]?.string ?? providerId
+            let bearerToken = section["experimental_bearer_token"]?.string
 
-            let modelCatalog = (try? readModelCatalog(for: providerId))
-                ?? meta?.modelCatalog
+            let modelCatalog = (try? readModelCatalog(for: providerId)) ?? meta?.modelCatalog
 
-            let provider = CodexModelProvider(
+            providers.append(CodexModelProvider(
                 id: providerId,
                 name: name,
-                baseURL: meta?.upstreamBaseURL ?? extractValue(from: sectionContent, key: "base_url") ?? "",
-                wireAPI: wireAPI,
+                baseURL: meta?.upstreamBaseURL ?? section["base_url"]?.string ?? "",
                 upstreamWireAPI: meta?.upstreamWireAPI ?? "chat",
-                apiKey: apiKey,
                 bearerToken: bearerToken,
                 modelCatalog: modelCatalog,
-                reasoningConfig: meta?.reasoningConfig
-            )
-            providers.append(provider)
+                reasoningConfig: meta?.reasoningConfig,
+                enabled: meta?.enabled ?? true
+            ))
         }
 
         return providers
     }
 
     public func getCurrentProvider() throws -> CodexModelProvider? {
-        guard FileManager.default.fileExists(atPath: configPath) else { return nil }
-        let content = try String(contentsOfFile: configPath, encoding: .utf8)
-        guard let providerId = extractValue(from: content, key: "model_provider") else { return nil }
-        let providers = try getModelProviders()
-        return providers.first { $0.id == providerId }
+        guard let table = try parseConfig() else { return nil }
+        guard let providerId = table["model_provider"]?.string else { return nil }
+        return try getModelProviders().first { $0.id == providerId }
     }
 
     public func getCurrentModel() throws -> String? {
-        guard FileManager.default.fileExists(atPath: configPath) else { return nil }
-        let content = try String(contentsOfFile: configPath, encoding: .utf8)
-        return extractValue(from: content, key: "model")
+        guard let table = try parseConfig() else { return nil }
+        return table["model"]?.string
     }
 
     /// Read model catalog from JSON file.
@@ -140,10 +163,8 @@ public class CodexConfigService {
         if let providerId = providerId {
             path = modelCatalogPath(for: providerId)
         } else {
-            guard let config = try? String(contentsOfFile: configPath, encoding: .utf8),
-                  let catalogFile = extractValue(from: config, key: "model_catalog_json") else {
-                return nil
-            }
+            guard let table = try parseConfig(),
+                  let catalogFile = table["model_catalog_json"]?.string else { return nil }
             path = "\(home)/.codex/\(catalogFile)"
         }
 
@@ -152,105 +173,75 @@ public class CodexConfigService {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = json["models"] as? [[String: Any]] else { return nil }
 
-        var entries: [ModelCatalogEntry] = []
-        for model in models {
-            if let slug = model["slug"] as? String {
-                entries.append(ModelCatalogEntry(
-                    model: slug,
-                    displayName: model["display_name"] as? String,
-                    contextWindow: model["context_window"] as? UInt64
-                ))
-            }
+        let entries: [ModelCatalogEntry] = models.compactMap { model in
+            guard let slug = model["slug"] as? String else { return nil }
+            return ModelCatalogEntry(
+                model: slug,
+                displayName: model["display_name"] as? String,
+                contextWindow: model["context_window"] as? UInt64
+            )
         }
         return ModelCatalog(models: entries)
     }
 
-    // MARK: - Reading config.toml provider sections (internal)
-
-    /// Parse all [model_providers.xxx] sections from config.toml.
-    private func readConfigProviderSections() throws -> [String: String] {
-        guard FileManager.default.fileExists(atPath: configPath) else { return [:] }
-        let content = try String(contentsOfFile: configPath, encoding: .utf8)
-        var sections: [String: String] = [:]
-
-        let pattern = #"\[model_providers\.([^\]]+)\]([^\[]*)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-            return [:]
-        }
-
-        let range = NSRange(content.startIndex..., in: content)
-        let matches = regex.matches(in: content, options: [], range: range)
-        for match in matches {
-            if let idRange = Range(match.range(at: 1), in: content),
-               let sectionRange = Range(match.range(at: 2), in: content) {
-                sections[String(content[idRange])] = String(content[sectionRange])
-            }
-        }
-        return sections
-    }
-
-    /// Get the content of a specific provider section from config.toml.
-    private func providerSectionContent(providerId: String, configContent: String) -> String? {
-        let pattern = #"\[model_providers\.\#(providerId)\]([^\[]*)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]),
-              let match = regex.firstMatch(in: configContent, options: [], range: NSRange(configContent.startIndex..., in: configContent)),
-              let sectionRange = Range(match.range(at: 1), in: configContent) else {
-            return nil
-        }
-        return String(configContent[sectionRange])
-    }
-
     // MARK: - Writing Codex Config
 
+    /// Switch active provider (and optionally model) in config.toml.
+    /// Matches EchoBird's apply_codex: always ensures model_reasoning_effort and disable_response_storage are set.
     public func switchProvider(to providerId: String, model: String? = nil) throws {
-        guard FileManager.default.fileExists(atPath: configPath) else {
-            throw CodexConfigError.configNotFound
-        }
-
-        var content = try String(contentsOfFile: configPath, encoding: .utf8)
-
-        let backupPath = configPath + backupSuffix
-        if !FileManager.default.fileExists(atPath: backupPath) {
-            try content.write(toFile: backupPath, atomically: true, encoding: .utf8)
-        }
-
-        content = try updateValue(in: content, key: "model_provider", newValue: providerId)
+        let table = try parseOrCreateConfig()
+        table["model_provider"] = providerId
+        table["model_reasoning_effort"] = "medium"
+        table["disable_response_storage"] = true
         if let model = model {
-            content = try updateValue(in: content, key: "model", newValue: model)
+            table["model"] = model
         }
-
-        try content.write(toFile: configPath, atomically: true, encoding: .utf8)
+        try writeConfig(table)
     }
 
     /// Save a provider: config.toml gets Codex-native fields, providers.json gets proxy metadata.
     public func saveProvider(_ provider: CodexModelProvider) throws {
         // 1. Write Codex-native section to config.toml
-        var content: String
-        if FileManager.default.fileExists(atPath: configPath) {
-            content = try String(contentsOfFile: configPath, encoding: .utf8)
-        } else {
-            content = generateDefaultConfig()
+        let table = try parseOrCreateConfig()
+
+        // Build provider section — matches EchoBird's canonical config.toml
+        let providerSection = TOMLTable()
+        providerSection["name"] = provider.name
+        providerSection["base_url"] = "http://127.0.0.1:15721/v1"
+        providerSection["wire_api"] = "responses"
+        providerSection["requires_openai_auth"] = true
+        if let token = provider.bearerToken, !token.isEmpty {
+            providerSection["experimental_bearer_token"] = token
         }
 
-        let sectionHeader = "[model_providers.\(provider.id)]"
-        if content.contains(sectionHeader) {
-            content = try updateProviderSection(content, provider: provider)
-        } else {
-            content = try addProviderSection(content, provider: provider)
-        }
+        // Get or create model_providers table
+        let modelProviders = table["model_providers"]?.table ?? TOMLTable()
+        modelProviders[provider.id] = providerSection
+        table["model_providers"] = modelProviders
 
-        let configDir = (configPath as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(atPath: configDir, withIntermediateDirectories: true)
+        // Top-level fields matching EchoBird's apply_codex
+        table["model_reasoning_effort"] = "medium"
+        table["disable_response_storage"] = true
 
-        // Model catalog
+        // Model catalog field
         if let catalog = provider.modelCatalog, !catalog.models.isEmpty {
             try generateModelCatalogJSON(from: catalog, providerId: provider.id)
-            content = try ensureModelCatalogField(content, providerId: provider.id)
+            table["model_catalog_json"] = "\(provider.id)-model-catalog.json"
+            // Always ensure model is set to a value present in the catalog.
+            // If the current model isn't in the new catalog, switch to the first entry.
+            let currentModel = table["model"]?.string
+            let modelSlugs = catalog.models.map { $0.model }
+            if currentModel == nil || !modelSlugs.contains(currentModel!) {
+                table["model"] = modelSlugs[0]
+            }
         } else {
-            content = removeModelCatalogField(content)
+            // Only remove if it's for this provider
+            if let existing = table["model_catalog_json"]?.string, existing.hasPrefix(provider.id) {
+                table["model_catalog_json"] = nil
+            }
         }
 
-        try content.write(toFile: configPath, atomically: true, encoding: .utf8)
+        try writeConfig(table)
 
         // 2. Write proxy metadata to providers.json
         var store = readProviderStore()
@@ -263,34 +254,40 @@ public class CodexConfigService {
         try writeProviderStore(store)
     }
 
+    /// Toggle enabled state of a provider in providers.json.
+    public func setProviderEnabled(id: String, enabled: Bool) throws {
+        var store = readProviderStore()
+        store.providers[id]?.enabled = enabled
+        try writeProviderStore(store)
+    }
+
+    /// Delete a provider from config.toml and providers.json.
     public func deleteProvider(id: String) throws {
-        guard FileManager.default.fileExists(atPath: configPath) else {
-            throw CodexConfigError.configNotFound
-        }
+        let table = try parseOrCreateConfig()
 
-        var content = try String(contentsOfFile: configPath, encoding: .utf8)
-
-        // If deleting current provider, switch to another
-        if let currentId = extractValue(from: content, key: "model_provider"), currentId == id {
-            let otherProviders = try getModelProviders().filter { $0.id != id }
-            if let first = otherProviders.first {
-                content = try updateValue(in: content, key: "model_provider", newValue: first.id)
-                if let firstModel = first.modelCatalog?.models.first?.model {
-                    content = try updateValue(in: content, key: "model", newValue: firstModel)
+        // If deleting current provider, switch to another or clear
+        if table["model_provider"]?.string == id {
+            let modelProviders = table["model_providers"]?.table ?? [:]
+            let otherIds = modelProviders.keys.filter { $0 != id }
+            if let first = otherIds.first {
+                table["model_provider"] = first
+                // Try to also switch model
+                let store = readProviderStore()
+                if let catalog = store.providers[first]?.modelCatalog ?? (try? readModelCatalog(for: first)),
+                   let firstModel = catalog.models.first?.model {
+                    table["model"] = firstModel
                 }
             } else {
-                content = try updateValue(in: content, key: "model_provider", newValue: "")
+                table["model_provider"] = nil
             }
         }
 
-        // Remove section from config.toml
-        let pattern = #"\[model_providers\.\#(id)\][^\[]*"#
-        if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) {
-            let range = NSRange(content.startIndex..., in: content)
-            content = regex.stringByReplacingMatches(in: content, options: [], range: range, withTemplate: "")
+        // Remove provider section from model_providers table
+        if let modelProviders = table["model_providers"]?.table {
+            modelProviders[id] = nil
         }
 
-        try content.write(toFile: configPath, atomically: true, encoding: .utf8)
+        try writeConfig(table)
 
         // Remove from providers.json
         var store = readProviderStore()
@@ -298,86 +295,14 @@ public class CodexConfigService {
         try writeProviderStore(store)
     }
 
-    public func setProxyURL(_ proxyURL: String = "http://127.0.0.1:15721/v1") throws {
-        guard FileManager.default.fileExists(atPath: configPath) else {
-            throw CodexConfigError.configNotFound
-        }
-
-        let content = try String(contentsOfFile: configPath, encoding: .utf8)
-
-        let backupPath = configPath + backupSuffix
-        if !FileManager.default.fileExists(atPath: backupPath) {
-            try content.write(toFile: backupPath, atomically: true, encoding: .utf8)
-        }
-
-        guard let providerId = extractValue(from: content, key: "model_provider") else {
-            throw CodexConfigError.parseError("No model_provider found")
-        }
-
-        let pattern = #"(\[model_providers\.\#(providerId)\][^\[]*base_url\s*=\s*)"[^"]*""#
-        if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) {
-            let range = NSRange(content.startIndex..., in: content)
-            let newContent = regex.stringByReplacingMatches(in: content, options: [], range: range, withTemplate: "$1\"\(proxyURL)\"")
-            try newContent.write(toFile: configPath, atomically: true, encoding: .utf8)
-        }
-    }
-
+    /// Restore config.toml from last backup.
     public func restoreOriginalConfig() throws {
         let backupPath = configPath + backupSuffix
         guard FileManager.default.fileExists(atPath: backupPath) else {
             throw CodexConfigError.backupNotFound
         }
-        let originalContent = try String(contentsOfFile: backupPath, encoding: .utf8)
-        try originalContent.write(toFile: configPath, atomically: true, encoding: .utf8)
-    }
-
-    // MARK: - Config.toml section builders (Codex-native fields only)
-
-    /// Write a provider section with only Codex-native fields.
-    /// Proxy-internal data (upstream URL, reasoning) lives in providers.json.
-    private func updateProviderSection(_ content: String, provider: CodexModelProvider) throws -> String {
-        let sectionPattern = #"(\[model_providers\.\#(provider.id)\][^\[]*)"#
-        guard let sectionRegex = try? NSRegularExpression(pattern: sectionPattern, options: [.dotMatchesLineSeparators]) else {
-            throw CodexConfigError.parseError("Failed to find provider section")
-        }
-
-        var newSection = "[model_providers.\(provider.id)]\n"
-        newSection += "name = \"\(provider.name)\"\n"
-        newSection += "base_url = \"http://127.0.0.1:15721/v1\"\n"
-        newSection += "wire_api = \"responses\"\n"
-        newSection += "requires_openai_auth = true\n"
-        if let bearerToken = provider.bearerToken, !bearerToken.isEmpty {
-            newSection += "experimental_bearer_token = \"\(bearerToken)\"\n"
-        }
-
-        return sectionRegex.stringByReplacingMatches(in: content, options: [], range: NSRange(content.startIndex..., in: content), withTemplate: newSection)
-    }
-
-    private func addProviderSection(_ content: String, provider: CodexModelProvider) throws -> String {
-        var newSection = "\n[model_providers.\(provider.id)]\n"
-        newSection += "name = \"\(provider.name)\"\n"
-        newSection += "base_url = \"http://127.0.0.1:15721/v1\"\n"
-        newSection += "wire_api = \"responses\"\n"
-        newSection += "requires_openai_auth = true\n"
-        if let bearerToken = provider.bearerToken, !bearerToken.isEmpty {
-            newSection += "experimental_bearer_token = \"\(bearerToken)\"\n"
-        }
-
-        // Insert after existing provider sections or at end
-        if content.contains("[model_providers.") {
-            let pattern = #"\[model_providers\.[^\]]+\][^\[]*"#
-            if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) {
-                let range = NSRange(content.startIndex..., in: content)
-                let matches = regex.matches(in: content, options: [], range: range)
-                if let lastMatch = matches.last, let lastRange = Range(lastMatch.range, in: content) {
-                    var newContent = content
-                    newContent.insert(contentsOf: newSection, at: content.index(after: lastRange.upperBound))
-                    return newContent
-                }
-            }
-        }
-
-        return content + "\n" + newSection
+        let original = try String(contentsOfFile: backupPath, encoding: .utf8)
+        try original.write(toFile: configPath, atomically: true, encoding: .utf8)
     }
 
     // MARK: - Model Catalog Generation
@@ -387,7 +312,7 @@ public class CodexConfigService {
             throw CodexConfigError.parseError("Failed to load gpt-5.5 template for model catalog")
         }
 
-        let defaultContextWindow = extractTopLevelU64("model_context_window") ?? 128000
+        let defaultContextWindow: UInt64 = 128000
 
         let entries = catalog.models.enumerated().map { (index, entry) -> [String: Any] in
             let displayName = entry.displayName ?? entry.model
@@ -514,82 +439,10 @@ public class CodexConfigService {
         ]
     }
 
-    // MARK: - TOML Helpers
-
-    private func extractValue(from content: String, key: String) -> String? {
-        let pattern = #"^\s*\#(key)\s*=\s*"([^"]*)""#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else {
-            return nil
-        }
-        let range = NSRange(content.startIndex..., in: content)
-        guard let match = regex.firstMatch(in: content, options: [], range: range),
-              let valueRange = Range(match.range(at: 1), in: content) else {
-            return nil
-        }
-        return String(content[valueRange])
-    }
-
-    private func extractTopLevelU64(_ key: String) -> UInt64? {
-        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return nil }
-        let pattern = #"^\s*\#(key)\s*=\s*(\d+)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]),
-              let match = regex.firstMatch(in: content, options: [], range: NSRange(content.startIndex..., in: content)),
-              let valueRange = Range(match.range(at: 1), in: content),
-              let value = UInt64(String(content[valueRange])) else { return nil }
-        return value
-    }
-
-    private func updateValue(in content: String, key: String, newValue: String) throws -> String {
-        let pattern = #"^(\s*\#(key)\s*=\s*)"[^"]*""#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else {
-            throw CodexConfigError.parseError("Failed to create regex for key: \(key)")
-        }
-        let newContent = regex.stringByReplacingMatches(in: content, options: [], range: NSRange(content.startIndex..., in: content), withTemplate: "$1\"\(newValue)\"")
-        if newContent == content {
-            return "\(key) = \"\(newValue)\"\n" + content
-        }
-        return newContent
-    }
-
-    private func ensureModelCatalogField(_ content: String, providerId: String) throws -> String {
-        let fieldName = "model_catalog_json"
-        let fieldValue = "\(providerId)-model-catalog.json"
-
-        if content.contains("\(fieldName) = \"\(fieldValue)\"") { return content }
-
-        let existingPattern = #"^\s*model_catalog_json\s*=\s*"[^"]*""#
-        if let regex = try? NSRegularExpression(pattern: existingPattern, options: [.anchorsMatchLines]) {
-            let range = NSRange(content.startIndex..., in: content)
-            if regex.firstMatch(in: content, options: [], range: range) != nil {
-                return regex.stringByReplacingMatches(in: content, options: [], range: range, withTemplate: "\(fieldName) = \"\(fieldValue)\"")
-            }
-        }
-
-        var lines = content.components(separatedBy: "\n")
-        var insertIndex = 0
-        for (index, line) in lines.enumerated() {
-            if line.hasPrefix("model =") || line.hasPrefix("wire_api =") {
-                insertIndex = index + 1
-            }
-        }
-        lines.insert("\(fieldName) = \"\(fieldValue)\"", at: insertIndex)
-        return lines.joined(separator: "\n")
-    }
-
-    private func removeModelCatalogField(_ content: String) -> String {
-        let pattern = #"^model_catalog_json\s*=\s*"[^"]*"\n"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else {
-            return content
-        }
-        return regex.stringByReplacingMatches(in: content, options: [], range: NSRange(content.startIndex..., in: content), withTemplate: "")
-    }
-
-    private func generateDefaultConfig() -> String {
+    /// Default minimal config.toml for new setups.
+    private func defaultConfigTOML() -> String {
         return """
         model_provider = "custom"
-        model = "gpt-4"
-
-        [model_providers]
 
         """
     }
@@ -602,12 +455,13 @@ struct ProviderStore: Codable {
     var providers: [String: ProviderMetaEntry] = [:]
 }
 
-/// Proxy-internal metadata for a provider. Mirrors echoBird's ~/.echobird/codex.json pattern.
+/// Proxy-internal metadata for a provider. Mirrors EchoBird's ~/.echobird/codex.json pattern.
 struct ProviderMetaEntry: Codable {
     var upstreamBaseURL: String?
     var upstreamWireAPI: String?
     var reasoningConfig: ReasoningConfig?
     var modelCatalog: ModelCatalog?
+    var enabled: Bool?
 }
 
 // MARK: - Public Types
@@ -617,49 +471,41 @@ public struct CodexModelProvider: Identifiable, Equatable {
     public let id: String
     public var name: String
     public var baseURL: String
-    public var wireAPI: String
     public var upstreamWireAPI: String
-    public var apiKey: String?
     public var bearerToken: String?
     public var modelCatalog: ModelCatalog?
     public var reasoningConfig: ReasoningConfig?
+    public var enabled: Bool
 
     public init(
         id: String,
         name: String,
         baseURL: String,
-        wireAPI: String = "responses",
         upstreamWireAPI: String = "chat",
-        apiKey: String? = nil,
         bearerToken: String? = nil,
         modelCatalog: ModelCatalog? = nil,
-        reasoningConfig: ReasoningConfig? = nil
+        reasoningConfig: ReasoningConfig? = nil,
+        enabled: Bool = true
     ) {
         self.id = id
         self.name = name
         self.baseURL = baseURL
-        self.wireAPI = wireAPI
         self.upstreamWireAPI = upstreamWireAPI
-        self.apiKey = apiKey
         self.bearerToken = bearerToken
         self.modelCatalog = modelCatalog
         self.reasoningConfig = reasoningConfig
-    }
-
-    public var isUsingProxy: Bool {
-        baseURL.contains("15721")
+        self.enabled = enabled
     }
 
     public static func == (lhs: CodexModelProvider, rhs: CodexModelProvider) -> Bool {
         lhs.id == rhs.id &&
         lhs.name == rhs.name &&
         lhs.baseURL == rhs.baseURL &&
-        lhs.wireAPI == rhs.wireAPI &&
         lhs.upstreamWireAPI == rhs.upstreamWireAPI &&
-        lhs.apiKey == rhs.apiKey &&
         lhs.bearerToken == rhs.bearerToken &&
         lhs.modelCatalog == rhs.modelCatalog &&
-        lhs.reasoningConfig == rhs.reasoningConfig
+        lhs.reasoningConfig == rhs.reasoningConfig &&
+        lhs.enabled == rhs.enabled
     }
 }
 

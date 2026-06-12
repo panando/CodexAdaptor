@@ -5,89 +5,82 @@ import CodexRouterCore
 public class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var appState: AppState?
+    private var locObserver: NSObjectProtocol?
 
     public override init() {
         super.init()
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        // Set activation policy for menu bar app
         NSApplication.shared.setActivationPolicy(.accessory)
 
         appState = AppState()
 
         setupMenuBar()
+        observeLocalization()
 
-        // Auto-start server
         Task { @MainActor in
             await appState?.startServer()
             updateMenu()
         }
     }
 
-    private func setupMenuBar() {
-        // Create status item
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private func observeLocalization() {
+        locObserver = NotificationCenter.default.addObserver(
+            forName: .LocalizationServiceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.rebuildMenu()
+        }
+    }
 
+    private func rebuildMenu() {
+        guard let statusItem = statusItem else { return }
+        let menu = buildMenu()
+        statusItem.menu = menu
+        Task { @MainActor in updateMenu() }
+    }
+
+    private func setupMenuBar() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let statusItem = statusItem else { return }
 
-        // Set the button
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "network", accessibilityDescription: "CodexRouter")
-            button.toolTip = "CodexRouter"
+            button.image = NSImage(systemSymbolName: "network", accessibilityDescription: "CodexAdaptor")
+            button.toolTip = "CodexAdaptor"
         }
 
-        // Create menu
+        statusItem.menu = buildMenu()
+    }
+
+    private func buildMenu() -> NSMenu {
         let menu = NSMenu()
 
-        // Status
-        let statusMenuItem = NSMenuItem(title: "Server: Starting...", action: nil, keyEquivalent: "")
+        let statusMenuItem = NSMenuItem(title: L10n.serverStarting, action: nil, keyEquivalent: "")
         statusMenuItem.tag = 1
         menu.addItem(statusMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // Toggle server
-        let toggleItem = NSMenuItem(title: "Stop Server", action: #selector(toggleServer), keyEquivalent: "s")
+        let toggleItem = NSMenuItem(title: L10n.stopServer, action: #selector(toggleServer), keyEquivalent: "s")
         toggleItem.tag = 2
         toggleItem.target = self
         menu.addItem(toggleItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // Dashboard
-        let dashboardItem = NSMenuItem(title: "Dashboard...", action: #selector(openDashboard), keyEquivalent: "d")
-        dashboardItem.target = self
-        menu.addItem(dashboardItem)
-
-        // Providers
-        let providersItem = NSMenuItem(title: "Providers...", action: #selector(openProviders), keyEquivalent: "p")
-        providersItem.target = self
-        menu.addItem(providersItem)
-
-        // Failover
-        let failoverItem = NSMenuItem(title: "Failover Config...", action: #selector(openFailover), keyEquivalent: "f")
-        failoverItem.target = self
-        menu.addItem(failoverItem)
-
-        // Settings
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        // Logs
-        let logsItem = NSMenuItem(title: "View Logs...", action: #selector(openLogs), keyEquivalent: "l")
-        logsItem.target = self
-        menu.addItem(logsItem)
+        let configureItem = NSMenuItem(title: L10n.configure, action: #selector(openConfigure), keyEquivalent: ",")
+        configureItem.target = self
+        menu.addItem(configureItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // Quit
-        let quitItem = NSMenuItem(title: "Quit CodexRouter", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: L10n.quit, action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
-        statusItem.menu = menu
+        return menu
     }
 
     @MainActor
@@ -95,11 +88,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         guard let menu = statusItem?.menu, let appState = appState else { return }
 
         if let statusItem = menu.item(withTag: 1) {
-            statusItem.title = appState.isRunning ? "Server: Running (port \(appState.port))" : "Server: Stopped"
+            if appState.isRunning {
+                statusItem.title = "\(L10n.serverRunning) \(String(appState.port)))"
+            } else {
+                statusItem.title = L10n.serverStopped
+            }
         }
 
         if let toggleItem = menu.item(withTag: 2) {
-            toggleItem.title = appState.isRunning ? "Stop Server" : "Start Server"
+            toggleItem.title = appState.isRunning ? L10n.stopServer : L10n.startServer
         }
     }
 
@@ -116,37 +113,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc func openDashboard() {
+    @objc func openConfigure() {
         guard let appState = appState else { return }
-        openWindow(id: "dashboard", title: "CodexRouter", size: NSSize(width: 300, height: 380)) {
-            MainView(appState: appState)
-        }
-    }
-
-    @objc func openProviders() {
-        guard let appState = appState else { return }
-        openWindow(id: "providers", title: "Providers", size: NSSize(width: 500, height: 400)) {
-            ProvidersView(appState: appState)
-        }
-    }
-
-    @objc func openFailover() {
-        guard let appState = appState else { return }
-        openWindow(id: "failover", title: "Failover Configuration", size: NSSize(width: 450, height: 500)) {
-            FailoverConfigView(appState: appState)
-        }
-    }
-
-    @objc func openSettings() {
-        guard let appState = appState else { return }
-        openWindow(id: "settings", title: "Settings", size: NSSize(width: 450, height: 500)) {
-            SettingsView(appState: appState)
-        }
-    }
-
-    @objc func openLogs() {
-        openWindow(id: "logs", title: "Logs", size: NSSize(width: 600, height: 400)) {
-            LogViewerView()
+        openWindow(id: "configure", title: "CodexAdaptor", size: NSSize(width: 780, height: 560)) {
+            ConfigurationView(appState: appState)
         }
     }
 

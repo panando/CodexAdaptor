@@ -4,8 +4,11 @@ import CodexRouterCore
 
 /// Route configuration for proxy server.
 public enum Routes {
-    public static func configure(router: Router<BasicRequestContext>) {
-        // Create request handler (simplified - no database needed)
+    public static func configure(
+        router: Router<BasicRequestContext>,
+        settingsHandler: @escaping () async -> (Int, String, String)
+    ) {
+        // Create request handler
         let requestHandler = RequestHandler()
 
         // Health check
@@ -13,6 +16,18 @@ public enum Routes {
             return Response(
                 status: .ok,
                 body: .init(byteBuffer: ByteBuffer(string: #"{"status":"healthy"}"#))
+            )
+        }
+
+        // CDP injection settings endpoint (polled by injected JS)
+        router.get("/settings/get") { _, _ in
+            let (status, contentType, body) = await settingsHandler()
+            var headers = HTTPFields()
+            headers[.contentType] = contentType
+            return Response(
+                status: .init(code: status, reasonPhrase: status == 200 ? "OK" : "Error"),
+                headers: headers,
+                body: .init(byteBuffer: ByteBuffer(string: body))
             )
         }
 
