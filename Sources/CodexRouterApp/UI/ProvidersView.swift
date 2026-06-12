@@ -336,7 +336,7 @@ public struct ProviderFormView: View {
             TextField(L10n.contextWindowExample, text: $newModelContextWindow)
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.leading)
-                .frame(width: 100)
+                .frame(maxWidth: .infinity)
 
             HStack(spacing: 4) {
                 Button {
@@ -407,24 +407,39 @@ public struct ProviderFormView: View {
                 VStack(spacing: 20) {
                     // Basic Information
                     sectionView(header: Label(L10n.basicInfo, systemImage: "info.circle")) {
-                        TextField(L10n.providerName, text: $name, prompt: Text(L10n.providerNamePrompt))
-                            .textFieldStyle(.roundedBorder)
-
-                        TextField(L10n.baseURL, text: $baseURL, prompt: Text("https://api.deepseek.com"))
-                            .textFieldStyle(.roundedBorder)
-                            .autocorrectionDisabled()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.providerName)
+                                .font(.callout)
+                            TextField(L10n.providerNamePrompt, text: $name)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.baseURL)
+                                .font(.callout)
+                            TextField("https://api.deepseek.com", text: $baseURL)
+                                .textFieldStyle(.roundedBorder)
+                                .autocorrectionDisabled()
+                        }
                     }
 
                     // API Configuration
                     sectionView(header: Label(L10n.apiConfig, systemImage: "key")) {
-                        Picker(L10n.wireProtocol, selection: $upstreamWireAPI) {
-                            Text(L10n.chatCompletions).tag("chat")
-                            Text(L10n.responsesAPI).tag("responses")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.wireProtocol)
+                                .font(.callout)
+                            Picker("", selection: $upstreamWireAPI) {
+                                Text(L10n.chatCompletions).tag("chat")
+                                Text(L10n.responsesAPI).tag("responses")
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
                         }
-                        .pickerStyle(.radioGroup)
-
-                        SecureField(L10n.apiKey, text: $bearerToken, prompt: Text(L10n.apiKeyPrompt))
-                            .textFieldStyle(.roundedBorder)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.apiKey)
+                                .font(.callout)
+                            SecureField(L10n.apiKeyPrompt, text: $bearerToken)
+                                .textFieldStyle(.roundedBorder)
+                        }
                     }
 
                     // Reasoning Configuration
@@ -458,9 +473,8 @@ public struct ProviderFormView: View {
                         }
 
                         if showReasoningConfig {
-                            VStack(alignment: .leading, spacing: 10) {
-                                // Thinking group
-                                VStack(alignment: .leading, spacing: 6) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
                                     Toggle(L10n.enableThinking, isOn: $supportsThinking)
                                     Text(L10n.thinkingDesc)
                                         .font(.caption).foregroundColor(.secondary)
@@ -474,18 +488,10 @@ public struct ProviderFormView: View {
                                         }
                                     }
                                 }
-                                .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color.secondary.opacity(0.06))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
-                                )
 
-                                // Effort group
-                                VStack(alignment: .leading, spacing: 6) {
+                                Divider()
+
+                                VStack(alignment: .leading, spacing: 4) {
                                     Toggle(L10n.enableEffort, isOn: $supportsEffort)
                                     Text(L10n.effortDesc)
                                         .font(.caption).foregroundColor(.secondary)
@@ -504,17 +510,9 @@ public struct ProviderFormView: View {
                                         }
                                     }
                                 }
-                                .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color.secondary.opacity(0.06))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
-                                )
 
-                                // Output format group
+                                Divider()
+
                                 VStack(alignment: .leading, spacing: 4) {
                                     Picker(L10n.outputFormat, selection: $reasoningOutputFormat) {
                                         Text(L10n.reasoningContent).tag("reasoning_content")
@@ -525,15 +523,6 @@ public struct ProviderFormView: View {
                                     Text(L10n.outputFormatDesc)
                                         .font(.caption).foregroundColor(.secondary)
                                 }
-                                .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color.secondary.opacity(0.06))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
-                                )
                             }
                         }
                     }
@@ -554,7 +543,7 @@ public struct ProviderFormView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 Text(L10n.contextWindow)
                                     .font(.caption).foregroundColor(.secondary)
-                                    .frame(width: 100, alignment: .leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 Spacer().frame(width: 24)
                             }
                             HStack(spacing: 12) {
@@ -566,10 +555,11 @@ public struct ProviderFormView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 Text(L10n.contextWindowExample)
                                     .font(.caption2).foregroundColor(.secondary)
-                                    .frame(width: 100, alignment: .leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 Spacer().frame(width: 24)
                             }
                         }
+                        .padding(.bottom, 4)
 
                         // Editable model rows
                         ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, _ in
@@ -597,7 +587,7 @@ public struct ProviderFormView: View {
                                 ))
                                 .textFieldStyle(.roundedBorder)
                                 .multilineTextAlignment(.leading)
-                                .frame(width: 100)
+                                .frame(maxWidth: .infinity)
 
                                 Button {
                                     modelIndexToDelete = index
