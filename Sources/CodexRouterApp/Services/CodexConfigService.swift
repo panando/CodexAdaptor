@@ -82,7 +82,7 @@ public class CodexConfigService {
             supportsThinking: supportsThinkingStr == "true" ? true : (supportsThinkingStr == "false" ? false : nil),
             supportsEffort: supportsEffortStr == "true" ? true : (supportsEffortStr == "false" ? false : nil),
             thinkingParam: extractValue(from: sectionContent, key: "thinking_param"),
-            effortParam: nil,
+            effortParam: extractValue(from: sectionContent, key: "effort_param"),
             effortValueMode: extractValue(from: sectionContent, key: "effort_value_mode"),
             outputFormat: extractValue(from: sectionContent, key: "reasoning_output_format")
         ) : nil
@@ -141,7 +141,7 @@ public class CodexConfigService {
                     supportsThinking: supportsThinkingStr == "true" ? true : (supportsThinkingStr == "false" ? false : nil),
                     supportsEffort: supportsEffortStr == "true" ? true : (supportsEffortStr == "false" ? false : nil),
                     thinkingParam: extractValue(from: sectionContent, key: "thinking_param"),
-                    effortParam: nil,
+                    effortParam: extractValue(from: sectionContent, key: "effort_param"),
                     effortValueMode: extractValue(from: sectionContent, key: "effort_value_mode"),
                     outputFormat: extractValue(from: sectionContent, key: "reasoning_output_format")
                 ) : nil

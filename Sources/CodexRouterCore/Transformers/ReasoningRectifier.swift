@@ -80,7 +80,7 @@ public struct ReasoningRectifier: Sendable {
             if let mode = config.effortValueMode {
                 switch mode {
                 case "deepseek":
-                    if let param = config.effortParam ?? config.thinkingParam {
+                    if let param = config.effortParam {
                         request[param] = mapEffortValue(effort, mode: "deepseek")
                     } else {
                         request["reasoning_effort"] = effort
