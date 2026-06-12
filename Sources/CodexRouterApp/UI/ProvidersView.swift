@@ -338,14 +338,16 @@ public struct ProviderFormView: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity)
 
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Button {
                     resetModelForm()
                     showAddModel = false
                 } label: {
-                    Image(systemName: "xmark.circle")
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.red)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
 
                 Button {
@@ -360,12 +362,14 @@ public struct ProviderFormView: View {
                     showAddModel = false
                 } label: {
                     Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.green)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(newModelSlug.isEmpty)
             }
-            .frame(width: 44)
+            .frame(width: 60)
         }
         .padding(.vertical, 2)
     }
@@ -560,7 +564,7 @@ public struct ProviderFormView: View {
                                 Text(L10n.contextWindow)
                                     .font(.caption).foregroundColor(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                Spacer().frame(width: 24)
+                                Spacer().frame(width: 60)
                             }
                             HStack(spacing: 12) {
                                 Text(L10n.modelAliasDesc)
@@ -572,7 +576,7 @@ public struct ProviderFormView: View {
                                 Text(L10n.contextWindowExample)
                                     .font(.caption2).foregroundColor(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                Spacer().frame(width: 24)
+                                Spacer().frame(width: 60)
                             }
                         }
                         .padding(.bottom, 4)
@@ -609,11 +613,13 @@ public struct ProviderFormView: View {
                                     modelIndexToDelete = index
                                 } label: {
                                     Image(systemName: "trash")
+                                        .font(.callout)
+                                        .foregroundColor(.red)
                                 }
-                                .buttonStyle(.borderless)
+                                .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .help(L10n.removeModel)
-                                .frame(width: 24)
+                                .frame(width: 60)
                             }
                         }
 
