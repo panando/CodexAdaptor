@@ -6,6 +6,12 @@ public struct ChatMessage: Codable, Equatable {
     public var content: String?
     public var toolCalls: [ToolCall]?
 
+    enum CodingKeys: String, CodingKey {
+        case role
+        case content
+        case toolCalls = "tool_calls"
+    }
+
     public init(role: String, content: String? = nil, toolCalls: [ToolCall]? = nil) {
         self.role = role
         self.content = content
@@ -43,6 +49,12 @@ public struct ChatChoice: Codable, Equatable {
     public var message: ChatMessage
     public var finishReason: String?
 
+    enum CodingKeys: String, CodingKey {
+        case index
+        case message
+        case finishReason = "finish_reason"
+    }
+
     public init(index: Int, message: ChatMessage, finishReason: String? = nil) {
         self.index = index
         self.message = message
@@ -55,6 +67,12 @@ public struct Usage: Codable, Equatable {
     public var promptTokens: Int
     public var completionTokens: Int
     public var totalTokens: Int
+
+    enum CodingKeys: String, CodingKey {
+        case promptTokens = "prompt_tokens"
+        case completionTokens = "completion_tokens"
+        case totalTokens = "total_tokens"
+    }
 
     public init(promptTokens: Int, completionTokens: Int) {
         self.promptTokens = promptTokens

@@ -1,30 +1,29 @@
 import Foundation
 import Combine
 import CodexRouterCore
-import CodexRouterDB
 
 /// Shared application state.
+/// Uses CodexConfigService as the SINGLE source of truth for configuration.
 @MainActor
 public final class AppState: ObservableObject {
     @Published public var isRunning = false
     @Published public var currentProvider: String?
+    @Published public var currentModel: String?
     @Published public var port: Int = 15721
-    @Published public var providers: [Provider] = []
 
-    public let database: Database
     public let server: ProxyServer
 
-    public init() throws {
-        self.database = try Database()
-        self.server = try ProxyServer(database: database)
-
-        loadProviders()
+    public init() {
+        self.server = ProxyServer()
+        loadConfig()
     }
 
-    public func loadProviders() {
-        let dao = ProviderDAO(database)
-        providers = (try? dao.getAll()) ?? []
-        currentProvider = try? dao.getCurrent()?.name
+    /// Load configuration from Codex config file.
+    public func loadConfig() {
+        if let provider = try? CodexConfigService.shared.getCurrentProvider() {
+            currentProvider = provider.name
+        }
+        currentModel = try? CodexConfigService.shared.getCurrentModel()
     }
 
     public func startServer() async {

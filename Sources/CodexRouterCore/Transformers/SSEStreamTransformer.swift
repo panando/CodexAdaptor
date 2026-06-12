@@ -2,7 +2,7 @@ import Foundation
 import NIOCore
 
 /// SSE event structure.
-public struct SSEEvent {
+public struct SSEEvent: Sendable {
     public var id: String?
     public var event: String?
     public var data: String
@@ -15,7 +15,7 @@ public struct SSEEvent {
 }
 
 /// Parses Server-Sent Events from a byte stream.
-public struct SSEParser {
+public struct SSEParser: Sendable {
 
     public init() {}
 
@@ -72,23 +72,472 @@ public struct SSEParser {
     }
 }
 
-/// Transforms streaming responses between Chat Completions and Responses API formats.
-public struct SSEStreamTransformer {
+/// State for Chat Completions to Responses API stream transformation.
+public struct ChatToResponsesState: Sendable {
+    public var responseStarted: Bool = false
+    public var responseId: String = "resp_codexrouter"
+    public var model: String = ""
+    public var nextOutputIndex: Int = 0
+    public var textItemId: String?
+    public var textItemAdded: Bool = false
+    public var reasoningItemId: String?
+    public var reasoningItemAdded: Bool = false
+    public var toolCalls: [Int: ToolCallState] = [:]
+    public var latestUsage: [String: Any]?
+    public var finishReason: String?
 
-    private let chatToResponses: ChatToResponsesTransformer
-    private let responsesToChat: ResponsesToChatTransformer
+    public struct ToolCallState: Sendable {
+        public var itemId: String = ""
+        public var callId: String = ""
+        public var name: String = ""
+        public var arguments: String = ""
+        public var added: Bool = false
+    }
+
+    public init() {}
+}
+
+/// Stateful stream transformer for Chat Completions to Responses API format.
+/// Following cc-switch's approach for proper Responses API lifecycle events.
+public actor ChatToResponsesStreamTransformer {
+    private var state: ChatToResponsesState = ChatToResponsesState()
+    private let parser: SSEParser = SSEParser()
+
+    public init() {}
+
+    /// Transform a chunk of Chat Completions SSE data to Responses API format.
+    public func transform(_ data: Data) -> Data? {
+        let events = parser.parse(data)
+
+        var outputEvents: [String] = []
+
+        for event in events {
+            // Skip [DONE] marker
+            guard !event.data.isEmpty, event.data != "[DONE]" else {
+                if event.data == "[DONE]" {
+                    // Send response.completed event
+                    let completedEvent = createResponseCompletedEvent(state: state)
+                    outputEvents.append(completedEvent)
+                    outputEvents.append("data: [DONE]\n\n")
+                }
+                continue
+            }
+
+            guard let jsonData = event.data.data(using: .utf8),
+                  let chatChunk = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                continue
+            }
+
+            // Process the chat chunk and generate Responses API events
+            let responsesEvents = processChatChunk(chatChunk)
+            outputEvents.append(contentsOf: responsesEvents)
+        }
+
+        guard !outputEvents.isEmpty else { return nil }
+        return outputEvents.joined().data(using: .utf8)
+    }
+
+    /// Process a single Chat Completions chunk and generate Responses API events.
+    private func processChatChunk(_ chunk: [String: Any]) -> [String] {
+        var events: [String] = []
+
+        // Extract response ID and model
+        if let id = chunk["id"] as? String {
+            state.responseId = "resp_\(id)"
+        }
+        if let model = chunk["model"] as? String, !model.isEmpty {
+            state.model = model
+        }
+
+        // Send response.created if not started
+        if !state.responseStarted {
+            state.responseStarted = true
+            events.append(createResponseCreatedEvent(state: state))
+            events.append(createResponseInProgressEvent(state: state))
+        }
+
+        // Extract usage if present
+        if let usage = chunk["usage"] as? [String: Any] {
+            state.latestUsage = convertUsage(usage)
+        }
+
+        // Process choices
+        guard let choices = chunk["choices"] as? [[String: Any]],
+              let choice = choices.first else {
+            return events
+        }
+
+        if let delta = choice["delta"] as? [String: Any] {
+            // Handle reasoning_content (DeepSeek style)
+            if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
+                events.append(contentsOf: processReasoningDelta(reasoning))
+            }
+
+            // Handle regular content
+            if let content = delta["content"] as? String, !content.isEmpty {
+                events.append(contentsOf: processContentDelta(content))
+            }
+
+            // Handle tool calls
+            if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
+                events.append(contentsOf: processToolCallsDelta(toolCalls))
+            }
+        }
+
+        // Handle finish reason
+        if let finishReason = choice["finish_reason"] as? String {
+            state.finishReason = finishReason
+        }
+
+        return events
+    }
+
+    /// Process reasoning content delta.
+    private func processReasoningDelta(_ delta: String) -> [String] {
+        var events: [String] = []
+
+        // Create reasoning item if not exists
+        if !state.reasoningItemAdded {
+            let itemId = "rs_\(state.responseId)"
+            state.reasoningItemId = itemId
+            state.reasoningItemAdded = true
+
+            let outputIndex = state.nextOutputIndex
+            state.nextOutputIndex += 1
+
+            events.append(createOutputItemAddedEvent(
+                itemId: itemId,
+                outputIndex: outputIndex,
+                type: "reasoning"
+            ))
+        }
+
+        // Send reasoning delta
+        if let itemId = state.reasoningItemId {
+            let outputIndex = state.nextOutputIndex - 1
+            events.append(createReasoningDeltaEvent(
+                itemId: itemId,
+                outputIndex: outputIndex,
+                delta: delta
+            ))
+        }
+
+        return events
+    }
+
+    /// Process regular text content delta.
+    private func processContentDelta(_ delta: String) -> [String] {
+        var events: [String] = []
+
+        // Finalize reasoning if active
+        if state.reasoningItemAdded, let itemId = state.reasoningItemId {
+            let outputIndex = state.nextOutputIndex - 1
+            events.append(createOutputItemDoneEvent(itemId: itemId, outputIndex: outputIndex, type: "reasoning"))
+            state.reasoningItemAdded = false
+        }
+
+        // Create text item if not exists
+        if !state.textItemAdded {
+            let itemId = "text_\(state.responseId)"
+            state.textItemId = itemId
+            state.textItemAdded = true
+
+            let outputIndex = state.nextOutputIndex
+            state.nextOutputIndex += 1
+
+            events.append(createOutputItemAddedEvent(
+                itemId: itemId,
+                outputIndex: outputIndex,
+                type: "message"
+            ))
+            events.append(createContentPartAddedEvent(itemId: itemId, outputIndex: outputIndex))
+        }
+
+        // Send text delta
+        if let itemId = state.textItemId {
+            let outputIndex = state.nextOutputIndex - 1
+            events.append(createOutputTextDeltaEvent(
+                itemId: itemId,
+                outputIndex: outputIndex,
+                delta: delta
+            ))
+        }
+
+        return events
+    }
+
+    /// Process tool calls delta.
+    private func processToolCallsDelta(_ toolCalls: [[String: Any]]) -> [String] {
+        var events: [String] = []
+
+        // Finalize text item if active
+        if state.textItemAdded, let itemId = state.textItemId {
+            let outputIndex = state.nextOutputIndex - 1
+            events.append(createContentPartDoneEvent(itemId: itemId, outputIndex: outputIndex))
+            events.append(createOutputItemDoneEvent(itemId: itemId, outputIndex: outputIndex, type: "message"))
+            state.textItemAdded = false
+        }
+
+        for toolCall in toolCalls {
+            guard let index = toolCall["index"] as? Int else { continue }
+
+            // Initialize tool call state if needed
+            if state.toolCalls[index] == nil {
+                state.toolCalls[index] = ChatToResponsesState.ToolCallState()
+            }
+
+            var toolState = state.toolCalls[index]!
+
+            // Extract function info
+            if let function = toolCall["function"] as? [String: Any] {
+                if let name = function["name"] as? String {
+                    toolState.name = name
+                }
+                if let arguments = function["arguments"] as? String {
+                    toolState.arguments += arguments
+                }
+            }
+
+            // Extract call_id
+            if let callId = toolCall["id"] as? String {
+                toolState.callId = callId
+            }
+
+            // Create tool item if not added
+            if !toolState.added {
+                let itemId = "fc_\(state.responseId)_\(index)"
+                toolState.itemId = itemId
+                toolState.added = true
+
+                let outputIndex = state.nextOutputIndex
+                state.nextOutputIndex += 1
+
+                events.append(createToolCallItemAddedEvent(
+                    itemId: itemId,
+                    outputIndex: outputIndex,
+                    callId: toolState.callId,
+                    name: toolState.name
+                ))
+
+                // Send initial arguments delta
+                if !toolState.arguments.isEmpty {
+                    events.append(createFunctionCallDeltaEvent(
+                        itemId: itemId,
+                        outputIndex: outputIndex,
+                        delta: toolState.arguments
+                    ))
+                    toolState.arguments = "" // Clear after sending
+                }
+            } else {
+                // Send arguments delta
+                if !toolState.arguments.isEmpty {
+                    let outputIndex = state.nextOutputIndex - 1
+                    events.append(createFunctionCallDeltaEvent(
+                        itemId: toolState.itemId,
+                        outputIndex: outputIndex,
+                        delta: toolState.arguments
+                    ))
+                    toolState.arguments = ""
+                }
+            }
+
+            state.toolCalls[index] = toolState
+        }
+
+        return events
+    }
+
+    // MARK: - Event Creation Helpers
+
+    private func createResponseCreatedEvent(state: ChatToResponsesState) -> String {
+        let response: [String: Any] = [
+            "id": state.responseId,
+            "object": "response",
+            "created_at": Int(Date().timeIntervalSince1970),
+            "status": "in_progress",
+            "model": state.model,
+            "output": []
+        ]
+        let event: [String: Any] = [
+            "type": "response.created",
+            "response": response
+        ]
+        return createSSEEvent(event: "response.created", data: event)
+    }
+
+    private func createResponseInProgressEvent(state: ChatToResponsesState) -> String {
+        let response: [String: Any] = [
+            "id": state.responseId,
+            "object": "response",
+            "status": "in_progress",
+            "model": state.model,
+            "output": []
+        ]
+        let event: [String: Any] = [
+            "type": "response.in_progress",
+            "response": response
+        ]
+        return createSSEEvent(event: "response.in_progress", data: event)
+    }
+
+    private func createResponseCompletedEvent(state: ChatToResponsesState) -> String {
+        var usage: [String: Any] = ["input_tokens": 0, "output_tokens": 0, "total_tokens": 0]
+        if let latestUsage = state.latestUsage {
+            usage = latestUsage
+        }
+
+        let response: [String: Any] = [
+            "id": state.responseId,
+            "object": "response",
+            "created_at": Int(Date().timeIntervalSince1970),
+            "status": "completed",
+            "model": state.model,
+            "output": [],
+            "usage": usage
+        ]
+        let event: [String: Any] = [
+            "type": "response.completed",
+            "response": response
+        ]
+        return createSSEEvent(event: "response.completed", data: event)
+    }
+
+    private func createOutputItemAddedEvent(itemId: String, outputIndex: Int, type: String) -> String {
+        let item: [String: Any] = [
+            "id": itemId,
+            "type": type,
+            "status": "in_progress"
+        ]
+        let event: [String: Any] = [
+            "type": "response.output_item.added",
+            "output_index": outputIndex,
+            "item": item
+        ]
+        return createSSEEvent(event: "response.output_item.added", data: event)
+    }
+
+    private func createContentPartAddedEvent(itemId: String, outputIndex: Int) -> String {
+        let part: [String: Any] = [
+            "type": "output_text",
+            "text": ""
+        ]
+        let event: [String: Any] = [
+            "type": "response.content_part.added",
+            "item_id": itemId,
+            "output_index": outputIndex,
+            "content_index": 0,
+            "part": part
+        ]
+        return createSSEEvent(event: "response.content_part.added", data: event)
+    }
+
+    private func createOutputTextDeltaEvent(itemId: String, outputIndex: Int, delta: String) -> String {
+        let event: [String: Any] = [
+            "type": "response.output_text.delta",
+            "item_id": itemId,
+            "output_index": outputIndex,
+            "content_index": 0,
+            "delta": delta
+        ]
+        return createSSEEvent(event: "response.output_text.delta", data: event)
+    }
+
+    private func createReasoningDeltaEvent(itemId: String, outputIndex: Int, delta: String) -> String {
+        let event: [String: Any] = [
+            "type": "response.reasoning_summary_text.delta",
+            "item_id": itemId,
+            "output_index": outputIndex,
+            "delta": delta
+        ]
+        return createSSEEvent(event: "response.reasoning_summary_text.delta", data: event)
+    }
+
+    private func createContentPartDoneEvent(itemId: String, outputIndex: Int) -> String {
+        let event: [String: Any] = [
+            "type": "response.content_part.done",
+            "item_id": itemId,
+            "output_index": outputIndex,
+            "content_index": 0
+        ]
+        return createSSEEvent(event: "response.content_part.done", data: event)
+    }
+
+    private func createOutputItemDoneEvent(itemId: String, outputIndex: Int, type: String) -> String {
+        let item: [String: Any] = [
+            "id": itemId,
+            "type": type,
+            "status": "completed"
+        ]
+        let event: [String: Any] = [
+            "type": "response.output_item.done",
+            "output_index": outputIndex,
+            "item": item
+        ]
+        return createSSEEvent(event: "response.output_item.done", data: event)
+    }
+
+    private func createToolCallItemAddedEvent(itemId: String, outputIndex: Int, callId: String, name: String) -> String {
+        let item: [String: Any] = [
+            "id": itemId,
+            "type": "function_call",
+            "call_id": callId,
+            "name": name,
+            "arguments": "",
+            "status": "in_progress"
+        ]
+        let event: [String: Any] = [
+            "type": "response.output_item.added",
+            "output_index": outputIndex,
+            "item": item
+        ]
+        return createSSEEvent(event: "response.output_item.added", data: event)
+    }
+
+    private func createFunctionCallDeltaEvent(itemId: String, outputIndex: Int, delta: String) -> String {
+        let event: [String: Any] = [
+            "type": "response.function_call_arguments.delta",
+            "item_id": itemId,
+            "output_index": outputIndex,
+            "delta": delta
+        ]
+        return createSSEEvent(event: "response.function_call_arguments.delta", data: event)
+    }
+
+    private func createSSEEvent(event: String, data: [String: Any]) -> String {
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: data),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            return ""
+        }
+        return "event: \(event)\ndata: \(jsonString)\n\n"
+    }
+
+    /// Convert Chat Completions usage to Responses API format.
+    private func convertUsage(_ usage: [String: Any]) -> [String: Any] {
+        let inputTokens = usage["prompt_tokens"] as? Int ?? 0
+        let outputTokens = usage["completion_tokens"] as? Int ?? 0
+        let totalTokens = usage["total_tokens"] as? Int ?? (inputTokens + outputTokens)
+
+        return [
+            "input_tokens": inputTokens,
+            "output_tokens": outputTokens,
+            "total_tokens": totalTokens
+        ]
+    }
+}
+
+/// Non-stateful transformer for simple transformations (kept for compatibility).
+public struct SSEStreamTransformer: Sendable {
     private let parser: SSEParser
 
     public init() {
-        self.chatToResponses = ChatToResponsesTransformer()
-        self.responsesToChat = ResponsesToChatTransformer()
         self.parser = SSEParser()
     }
 
-    /// Transform Chat Completions SSE stream to Responses format.
+    /// Transform Chat Completions SSE stream to Responses API format.
+    @available(*, deprecated, message: "Use ChatToResponsesStreamTransformer for stateful transformation")
     public func transformChatToResponsesStream(_ data: Data) -> Data? {
         let events = parser.parse(data)
-
+        var state = ChatToResponsesState()
         var outputEvents: [String] = []
 
         for event in events {
@@ -104,11 +553,9 @@ public struct SSEStreamTransformer {
                 continue
             }
 
-            if let responsesChunk = transformChatChunkToResponses(chatChunk) {
-                if let chunkData = try? JSONSerialization.data(withJSONObject: responsesChunk),
-                   let chunkString = String(data: chunkData, encoding: .utf8) {
-                    outputEvents.append("data: \(chunkString)\n\n")
-                }
+            // Simple passthrough for deprecated method
+            if let chunk = transformSimpleChunk(chatChunk) {
+                outputEvents.append(chunk)
             }
         }
 
@@ -116,34 +563,9 @@ public struct SSEStreamTransformer {
         return outputEvents.joined().data(using: .utf8)
     }
 
-    /// Transform Responses SSE stream to Chat Completions format.
-    public func transformResponsesToChatStream(_ data: Data) -> Data? {
-        let events = parser.parse(data)
-
-        var outputEvents: [String] = []
-
-        for event in events {
-            guard !event.data.isEmpty else { continue }
-
-            guard let jsonData = event.data.data(using: .utf8),
-                  let responsesChunk = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-                continue
-            }
-
-            if let chatChunk = transformResponsesChunkToChat(responsesChunk) {
-                if let chunkData = try? JSONSerialization.data(withJSONObject: chatChunk),
-                   let chunkString = String(data: chunkData, encoding: .utf8) {
-                    outputEvents.append("data: \(chunkString)\n\n")
-                }
-            }
-        }
-
-        guard !outputEvents.isEmpty else { return nil }
-        return outputEvents.joined().data(using: .utf8)
-    }
-
-    private func transformChatChunkToResponses(_ chunk: [String: Any]) -> [String: Any]? {
+    private func transformSimpleChunk(_ chunk: [String: Any]) -> String? {
         var response: [String: Any] = [:]
+        response["object"] = "response.chunk"
 
         if let id = chunk["id"] as? String {
             response["id"] = id
@@ -152,101 +574,33 @@ public struct SSEStreamTransformer {
             response["model"] = model
         }
 
-        if let choices = chunk["choices"] as? [[String: Any]] {
-            var outputs: [[String: Any]] = []
-
-            for choice in choices {
-                if let delta = choice["delta"] as? [String: Any] {
-                    var output: [String: Any] = [:]
-
-                    if let content = delta["content"] as? String {
-                        output["type"] = "message"
-                        output["content"] = [
-                            ["type": "output_text", "text": content]
-                        ]
-                    }
-
-                    if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
-                        for toolCall in toolCalls {
-                            var tc = toolCall
-                            tc["type"] = "function_call"
-                            outputs.append(tc)
-                        }
-                    }
-
-                    if !output.isEmpty {
-                        outputs.append(output)
-                    }
-                }
-            }
-
-            if !outputs.isEmpty {
-                response["output"] = outputs
-            }
+        guard let choices = chunk["choices"] as? [[String: Any]],
+              let choice = choices.first,
+              let delta = choice["delta"] as? [String: Any] else {
+            return nil
         }
 
-        return response.isEmpty ? nil : response
-    }
+        var output: [String: Any] = [:]
 
-    private func transformResponsesChunkToChat(_ chunk: [String: Any]) -> [String: Any]? {
-        var response: [String: Any] = [:]
-
-        response["object"] = "chat.completion.chunk"
-
-        if let id = chunk["id"] as? String {
-            response["id"] = id
-        }
-        if let model = chunk["model"] as? String {
-            response["model"] = model
+        if let content = delta["content"] as? String, !content.isEmpty {
+            output["type"] = "message"
+            output["content"] = [["type": "output_text", "text": content]]
         }
 
-        response["created"] = Int(Date().timeIntervalSince1970)
-
-        if let output = chunk["output"] as? [[String: Any]] {
-            var choices: [[String: Any]] = []
-
-            for item in output {
-                var delta: [String: Any] = [:]
-
-                if let type = item["type"] as? String {
-                    if type == "message" {
-                        if let content = item["content"] as? [[String: Any]] {
-                            for block in content {
-                                if let text = block["text"] as? String {
-                                    delta["content"] = text
-                                }
-                            }
-                        }
-                    } else if type == "function_call" {
-                        if let id = item["id"] as? String,
-                           let name = item["name"] as? String,
-                           let arguments = item["arguments"] as? String {
-                            delta["tool_calls"] = [[
-                                "index": 0,
-                                "id": id,
-                                "type": "function",
-                                "function": [
-                                    "name": name,
-                                    "arguments": arguments
-                                ]
-                            ]]
-                        }
-                    }
-                }
-
-                if !delta.isEmpty {
-                    choices.append([
-                        "index": 0,
-                        "delta": delta
-                    ])
-                }
-            }
-
-            if !choices.isEmpty {
-                response["choices"] = choices
-            }
+        if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
+            output["type"] = "reasoning"
+            output["content"] = [["type": "reasoning_text", "text": reasoning]]
         }
 
-        return response.isEmpty ? nil : response
+        if output.isEmpty { return nil }
+
+        response["output"] = [output]
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: response),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            return nil
+        }
+
+        return "data: \(jsonString)\n\n"
     }
 }

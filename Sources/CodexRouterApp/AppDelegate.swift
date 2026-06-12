@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import CodexRouterCore
-import CodexRouterDB
 
 public class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
@@ -15,13 +14,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // Set activation policy for menu bar app
         NSApplication.shared.setActivationPolicy(.accessory)
 
-        do {
-            appState = try AppState()
-        } catch {
-            NSLog("[CodexRouter] Failed to initialize: \(error)")
-            NSApplication.shared.terminate(nil)
-            return
-        }
+        appState = AppState()
 
         setupMenuBar()
 
@@ -82,11 +75,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
-        // Codex Integration
-        let codexItem = NSMenuItem(title: "Codex Integration...", action: #selector(openCodexIntegration), keyEquivalent: "c")
-        codexItem.target = self
-        menu.addItem(codexItem)
-
         // Logs
         let logsItem = NSMenuItem(title: "View Logs...", action: #selector(openLogs), keyEquivalent: "l")
         logsItem.target = self
@@ -138,7 +126,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openProviders() {
         guard let appState = appState else { return }
         openWindow(id: "providers", title: "Providers", size: NSSize(width: 500, height: 400)) {
-            ProviderListView(appState: appState)
+            ProvidersView(appState: appState)
         }
     }
 
@@ -153,13 +141,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         guard let appState = appState else { return }
         openWindow(id: "settings", title: "Settings", size: NSSize(width: 450, height: 500)) {
             SettingsView(appState: appState)
-        }
-    }
-
-    @objc func openCodexIntegration() {
-        guard let appState = appState else { return }
-        openWindow(id: "codex", title: "Codex Integration", size: NSSize(width: 420, height: 320)) {
-            CodexIntegrationView(appState: appState)
         }
     }
 

@@ -86,7 +86,7 @@ public struct MenuBarView: View {
         window.title = "Providers"
         window.identifier = NSUserInterfaceItemIdentifier("providers-window")
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: ProviderListView(appState: appState))
+        window.contentView = NSHostingView(rootView: ProvidersView(appState: appState))
         window.center()
         window.makeKeyAndOrderFront(nil)
     }

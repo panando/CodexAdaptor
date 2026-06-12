@@ -80,14 +80,15 @@ public enum ProxyEndpoint: String, Sendable {
     case health = "/health"
 
     /// Returns the upstream path for this endpoint.
-    public func upstreamPath(provider: Provider) -> String {
+    /// Uses simplified UpstreamProvider for configuration.
+    public func upstreamPath(usesChatCompletions: Bool) -> String {
         switch self {
         case .chatCompletions:
             return "/v1/chat/completions"
         case .responses:
-            // Check if provider uses Responses API format
-            if provider.meta?.apiFormat == "responses" {
-                return "/v1/responses"
+            // If provider uses Chat Completions API, forward to chat completions endpoint
+            if usesChatCompletions {
+                return "/v1/chat/completions"
             }
             return "/v1/responses"
         case .responsesCompact:

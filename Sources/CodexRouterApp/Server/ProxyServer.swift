@@ -1,27 +1,22 @@
 import Foundation
 import Hummingbird
 import CodexRouterCore
-import CodexRouterDB
 
 /// HTTP proxy server for Codex routing.
+/// Simplified - reads configuration directly from ~/.codex/config.toml
 public final class ProxyServer: ObservableObject {
     @Published public private(set) var isRunning = false
     @Published public private(set) var port: Int = 15721
 
     private var app: Application<RouterResponder<BasicRequestContext>>?
-    private let database: Database
-    private let providerRouter: ProviderRouter
 
-    public init(database: Database) throws {
-        self.database = database
-        self.providerRouter = ProviderRouter(database: database)
-    }
+    public init() {}
 
     public func start(port: Int = 15721) async throws {
         self.port = port
 
         let router = Router()
-        Routes.configure(router: router, providerRouter: providerRouter, database: database)
+        Routes.configure(router: router)
 
         let responder = router.buildResponder()
         let app = Application(

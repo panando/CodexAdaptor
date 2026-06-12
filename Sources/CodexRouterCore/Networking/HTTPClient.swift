@@ -48,14 +48,14 @@ public final class HTTPClient: Sendable {
         return (data, status)
     }
 
-    /// Send a streaming request to an upstream provider.
+    /// Send a streaming request and return an async sequence of data chunks.
+    /// This enables real-time streaming instead of buffering the entire response.
     public func sendStreaming(
         url: String,
         method: HTTPRequest.Method,
         headers: [String: String],
-        body: Data?,
-        onEvent: @escaping @Sendable (Data) -> Void
-    ) async throws -> HTTPResponse.Status {
+        body: Data?
+    ) async throws -> StreamingResponse {
         guard let url = URL(string: url) else {
             throw HTTPClientError.invalidURL
         }
@@ -81,12 +81,72 @@ public final class HTTPClient: Sendable {
 
         let status = HTTPResponse.Status(integerLiteral: httpResponse.statusCode)
 
-        // Read streaming data
-        for try await byte in asyncBytes {
-            onEvent(Data([byte]))
-        }
+        // Return a streaming response that yields complete SSE events
+        return StreamingResponse(status: status, asyncBytes: asyncBytes)
+    }
+}
 
-        return status
+/// Streaming response that provides an async sequence of SSE events.
+public struct StreamingResponse: Sendable {
+    public let status: HTTPResponse.Status
+    private let asyncBytes: URLSession.AsyncBytes
+
+    init(status: HTTPResponse.Status, asyncBytes: URLSession.AsyncBytes) {
+        self.status = status
+        self.asyncBytes = asyncBytes
+    }
+
+    /// Returns an async sequence that yields complete SSE events.
+    /// Handles both \n\n and \r\n\r\n delimiters (following cc-switch's approach).
+    public var events: AsyncStream<Data> {
+        AsyncStream { continuation in
+            Task {
+                var buffer = Data()
+                do {
+                    for try await byte in asyncBytes {
+                        buffer.append(byte)
+
+                        // Check for SSE event boundaries (both \n\n and \r\n\r\n)
+                        if buffer.count >= 4 {
+                            let lastFour = buffer.suffix(4)
+                            if lastFour == Data([0x0D, 0x0A, 0x0D, 0x0A]) { // \r\n\r\n
+                                let event = buffer.dropLast(4)
+                                if !event.isEmpty {
+                                    continuation.yield(Data(event))
+                                }
+                                buffer.removeAll(keepingCapacity: true)
+                            }
+                        }
+
+                        if buffer.count >= 2 {
+                            let lastTwo = buffer.suffix(2)
+                            if lastTwo == Data([0x0A, 0x0A]) { // \n\n
+                                // Only if not already handled by \r\n\r\n
+                                if buffer.count >= 4 {
+                                    let lastFour = buffer.suffix(4)
+                                    if lastFour == Data([0x0D, 0x0A, 0x0D, 0x0A]) {
+                                        continue // Already handled above
+                                    }
+                                }
+                                let event = buffer.dropLast(2)
+                                if !event.isEmpty {
+                                    continuation.yield(Data(event))
+                                }
+                                buffer.removeAll(keepingCapacity: true)
+                            }
+                        }
+                    }
+
+                    // Send any remaining data
+                    if !buffer.isEmpty {
+                        continuation.yield(buffer)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish()
+                }
+            }
+        }
     }
 }
 

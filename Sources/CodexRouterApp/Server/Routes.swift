@@ -1,17 +1,12 @@
 import Foundation
 import Hummingbird
 import CodexRouterCore
-import CodexRouterDB
 
 /// Route configuration for proxy server.
 public enum Routes {
-    public static func configure(
-        router: Router<BasicRequestContext>,
-        providerRouter: ProviderRouter,
-        database: Database
-    ) {
-        // Create request handler
-        let requestHandler = RequestHandler(database: database, providerRouter: providerRouter)
+    public static func configure(router: Router<BasicRequestContext>) {
+        // Create request handler (simplified - no database needed)
+        let requestHandler = RequestHandler()
 
         // Health check
         router.get("/health") { _, _ in

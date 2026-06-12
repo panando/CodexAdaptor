@@ -80,4 +80,12 @@ public struct Provider: Codable, Identifiable, Hashable {
         }
         return ["chat", "chat_completions", "openai_chat"].contains(apiFormat.lowercased())
     }
+
+    /// Map a model name to the provider's actual model name.
+    public func mapModel(_ model: String) -> String {
+        if let mapping = meta?.modelMappings?[model] {
+            return mapping
+        }
+        return model
+    }
 }

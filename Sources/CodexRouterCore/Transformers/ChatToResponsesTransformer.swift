@@ -59,7 +59,7 @@ public struct ResponsesUsage: Codable, Equatable {
 }
 
 /// Transforms Chat Completions format to OpenAI Responses API format.
-public struct ChatToResponsesTransformer {
+public struct ChatToResponsesTransformer: Sendable {
 
     public init() {}
 

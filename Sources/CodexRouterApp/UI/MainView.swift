@@ -1,10 +1,10 @@
 import SwiftUI
 import CodexRouterCore
-import CodexRouterDB
 
 /// Main window view showing server status and quick actions.
 public struct MainView: View {
     @ObservedObject var appState: AppState
+    @State private var providerCount: Int = 0
 
     public init(appState: AppState) {
         self.appState = appState
@@ -67,7 +67,7 @@ public struct MainView: View {
                 HStack(spacing: 12) {
                     Button("Providers") {
                         openWindow(id: "providers", title: "Providers", size: NSSize(width: 500, height: 400)) {
-                            ProviderListView(appState: appState)
+                            ProvidersView(appState: appState)
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -96,15 +96,15 @@ public struct MainView: View {
                     .frame(maxWidth: .infinity)
                 }
 
-                // Codex Integration
+                // Codex Providers
                 Button(action: {
-                    openWindow(id: "codex", title: "Codex Integration", size: NSSize(width: 420, height: 320)) {
-                        CodexIntegrationView(appState: appState)
+                    openWindow(id: "codex", title: "Codex Providers", size: NSSize(width: 500, height: 450)) {
+                        ProvidersView(appState: appState)
                     }
                 }) {
                     HStack {
                         Image(systemName: "app.badge.checkmark")
-                        Text("Codex Integration")
+                        Text("Codex Providers")
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -114,7 +114,7 @@ public struct MainView: View {
 
             // Provider count
             HStack {
-                Text("\(appState.providers.count) provider\(appState.providers.count == 1 ? "" : "s") configured")
+                Text("\(providerCount) provider\(providerCount == 1 ? "" : "s") configured")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
@@ -125,6 +125,13 @@ public struct MainView: View {
         }
         .padding(20)
         .frame(width: 280)
+        .onAppear {
+            loadProviderCount()
+        }
+    }
+
+    private func loadProviderCount() {
+        providerCount = (try? CodexConfigService.shared.getModelProviders().count) ?? 0
     }
 
     private func openWindow(id: String, title: String, size: NSSize, content: () -> some View) {
