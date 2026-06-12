@@ -110,6 +110,7 @@ public class CodexConfigService {
                     ?? extractValue(from: sectionContent, key: "baseURL")
                     ?? ""
                 let wireAPI = extractValue(from: sectionContent, key: "wire_api") ?? "responses"
+                let upstreamWireAPI = extractValue(from: sectionContent, key: "upstream_wire_api") ?? "chat"
                 let apiKey = extractValue(from: sectionContent, key: "api_key") ?? extractValue(from: sectionContent, key: "apiKey")
                 let bearerToken = extractValue(from: sectionContent, key: "experimental_bearer_token")
 
@@ -121,6 +122,7 @@ public class CodexConfigService {
                     name: name ?? providerId,
                     baseURL: baseURL,
                     wireAPI: wireAPI,
+                    upstreamWireAPI: upstreamWireAPI,
                     apiKey: apiKey,
                     bearerToken: bearerToken,
                     modelCatalog: modelCatalog
@@ -587,7 +589,7 @@ public class CodexConfigService {
         newSection += "base_url = \"http://127.0.0.1:15721/v1\"\n"
         newSection += "upstream_base_url = \"\(provider.baseURL)\"\n"
         newSection += "wire_api = \"\(provider.wireAPI)\"\n"
-        newSection += "upstream_wire_api = \"\(provider.wireAPI)\"\n"
+        newSection += "upstream_wire_api = \"\(provider.upstreamWireAPI)\"\n"
         newSection += "requires_openai_auth = true\n"  // Required by cc-switch
         if let apiKey = provider.apiKey, !apiKey.isEmpty {
             newSection += "api_key = \"\(apiKey)\"\n"
@@ -608,7 +610,7 @@ public class CodexConfigService {
         newSection += "base_url = \"http://127.0.0.1:15721/v1\"\n"
         newSection += "upstream_base_url = \"\(provider.baseURL)\"\n"
         newSection += "wire_api = \"\(provider.wireAPI)\"\n"
-        newSection += "upstream_wire_api = \"\(provider.wireAPI)\"\n"
+        newSection += "upstream_wire_api = \"\(provider.upstreamWireAPI)\"\n"
         newSection += "requires_openai_auth = true\n"  // Required by cc-switch
         if let apiKey = provider.apiKey, !apiKey.isEmpty {
             newSection += "api_key = \"\(apiKey)\"\n"
@@ -691,6 +693,8 @@ public struct CodexModelProvider: Identifiable, Equatable {
     public var name: String
     public var baseURL: String
     public var wireAPI: String
+    /// The API format of the UPSTREAM provider (chat or responses). Defaults to "chat".
+    public var upstreamWireAPI: String
     public var apiKey: String?
     public var bearerToken: String?
     /// User's model catalog configuration (from settings.modelCatalog)
@@ -701,6 +705,7 @@ public struct CodexModelProvider: Identifiable, Equatable {
         name: String,
         baseURL: String,
         wireAPI: String = "responses",
+        upstreamWireAPI: String = "chat",
         apiKey: String? = nil,
         bearerToken: String? = nil,
         modelCatalog: ModelCatalog? = nil
@@ -709,6 +714,7 @@ public struct CodexModelProvider: Identifiable, Equatable {
         self.name = name
         self.baseURL = baseURL
         self.wireAPI = wireAPI
+        self.upstreamWireAPI = upstreamWireAPI
         self.apiKey = apiKey
         self.bearerToken = bearerToken
         self.modelCatalog = modelCatalog
@@ -723,6 +729,7 @@ public struct CodexModelProvider: Identifiable, Equatable {
         lhs.name == rhs.name &&
         lhs.baseURL == rhs.baseURL &&
         lhs.wireAPI == rhs.wireAPI &&
+        lhs.upstreamWireAPI == rhs.upstreamWireAPI &&
         lhs.apiKey == rhs.apiKey &&
         lhs.bearerToken == rhs.bearerToken &&
         lhs.modelCatalog == rhs.modelCatalog
