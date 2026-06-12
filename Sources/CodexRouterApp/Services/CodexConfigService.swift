@@ -237,7 +237,7 @@ public class CodexConfigService {
         } else {
             // Only remove if it's for this provider
             if let existing = table["model_catalog_json"]?.string, existing.hasPrefix(provider.id) {
-                table["model_catalog_json"] = nil
+                table.remove(at: "model_catalog_json")
             }
         }
 
@@ -278,13 +278,18 @@ public class CodexConfigService {
                     table["model"] = firstModel
                 }
             } else {
-                table["model_provider"] = nil
+                table.remove(at: "model_provider")
             }
         }
 
         // Remove provider section from model_providers table
         if let modelProviders = table["model_providers"]?.table {
-            modelProviders[id] = nil
+            modelProviders.remove(at: id)
+        }
+
+        // Clean up model_catalog_json if it belongs to this provider
+        if let catalogJson = table["model_catalog_json"]?.string, catalogJson.hasPrefix(id) {
+            table.remove(at: "model_catalog_json")
         }
 
         try writeConfig(table)
@@ -293,6 +298,12 @@ public class CodexConfigService {
         var store = readProviderStore()
         store.providers.removeValue(forKey: id)
         try writeProviderStore(store)
+
+        // Remove model catalog file
+        let catalogPath = modelCatalogPath(for: id)
+        if FileManager.default.fileExists(atPath: catalogPath) {
+            try? FileManager.default.removeItem(atPath: catalogPath)
+        }
     }
 
     /// Restore config.toml from last backup.
