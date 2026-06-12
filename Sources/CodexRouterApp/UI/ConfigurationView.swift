@@ -141,7 +141,7 @@ private struct HelpView: View {
                         .font(.headline)
                     VStack(alignment: .leading, spacing: 10) {
                         fileEntry(path: "~/.codex/config.toml", desc: L10n.fileConfigDesc)
-                        fileEntry(path: "~/.codex-router/providers.json", desc: L10n.fileProvidersDesc)
+                        fileEntry(path: "~/.codex/providers.json", desc: L10n.fileProvidersDesc)
                         fileEntry(path: "~/.codex/<provider-id>-model-catalog.json", desc: L10n.fileCatalogDesc)
                         fileEntry(path: "~/.codex/config.toml.bak.codexadaptor", desc: L10n.fileBackupDesc)
                     }
@@ -342,7 +342,7 @@ private struct ServerSettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    LabeledContent("Metadata", value: "~/.codex-router/providers.json")
+                    LabeledContent("Metadata", value: "~/.codex/providers.json")
                         .font(.system(.body, design: .monospaced))
                     Text(L10n.metadataDesc)
                         .font(.caption)

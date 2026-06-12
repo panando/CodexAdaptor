@@ -25,7 +25,7 @@ public class CodexConfigService {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         self.home = home
         self.configPath = "\(home)/.codex/config.toml"
-        self.providersPath = "\(home)/.codex-router/providers.json"
+        self.providersPath = "\(home)/.codex/providers.json"
         self.modelsCachePath = "\(home)/.codex/models_cache.json"
     }
 
@@ -450,7 +450,7 @@ public class CodexConfigService {
 
 // MARK: - Providers JSON Model
 
-/// Root of ~/.codex-router/providers.json
+/// Root of ~/.codex/providers.json
 struct ProviderStore: Codable {
     var providers: [String: ProviderMetaEntry] = [:]
 }

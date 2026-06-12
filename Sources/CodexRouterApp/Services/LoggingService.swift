@@ -86,10 +86,10 @@ public actor LoggingService {
         logFileURL = nil
     }
 
-    /// Default log path: ~/.codex-router/logs/proxy.log
+    /// Default log path: ~/.codex/logs/proxy.log
     public static func defaultLogPath() -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.codex-router/logs/proxy.log"
+        return "\(home)/.codex/logs/proxy.log"
     }
 
     // MARK: - Logging Methods

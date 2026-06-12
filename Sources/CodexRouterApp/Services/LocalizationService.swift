@@ -167,7 +167,7 @@ public enum L10n {
     static var setup4: String { lang("Select the provider in the Server tab — this updates ~/.codex/config.toml", "在服务器标签页中选择供应商 — 这将更新 ~/.codex/config.toml") }
     static var setup5: String { lang("Launch Codex — it will connect through the proxy automatically", "启动 Codex — 它会自动通过代理连接") }
     static var fileConfigDesc: String { lang("Codex's main configuration. CodexAdaptor sets model_provider, model, base_url (to localhost proxy), wire_api, model_catalog_json, and experimental_bearer_token here.", "Codex 的主配置文件。CodexAdaptor 在此设置 model_provider、model、base_url（指向本地代理）、wire_api、model_catalog_json 和 experimental_bearer_token。") }
-    static var fileProvidersDesc: String { lang("CodexAdaptor's internal metadata. Stores upstream base URLs, reasoning config overrides, and model catalogs — separate from config.toml so Codex plugins are never affected.", "CodexAdaptor 的内部元数据。存储上游地址、推理配置覆盖和模型目录 — 与 config.toml 分离，确保 Codex 插件不受影响。") }
+    static var fileProvidersDesc: String { lang("CodexAdaptor's internal metadata. Stores upstream base URLs, reasoning config overrides, and model catalogs — separate from config.toml so Codex plugins are never affected.", "CodexAdaptor 的内部元数据。存储上游地址、推理配置覆盖和模型目录 — 与 config.toml 同目录，确保 Codex 插件不受影响。") }
     static var fileCatalogDesc: String { lang("Per-provider model catalog files. Generated from the Custom Models section in the provider editor. Codex reads these to populate its model selector.", "每个供应商的模型目录文件。由供应商编辑器中的自定义模型部分生成。Codex 读取这些文件以填充模型选择器。") }
     static var fileBackupDesc: String { lang("Automatic backup created before every config.toml write. Restore this file to undo CodexAdaptor's last config change.", "每次写入 config.toml 前自动创建的备份。恢复此文件可撤销 CodexAdaptor 的最后一次配置更改。") }
 
