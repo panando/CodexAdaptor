@@ -452,8 +452,11 @@ public struct ProviderFormView: View {
                         }
                     ) {
                         HStack {
-                            Toggle(L10n.overrideReasoning, isOn: $showReasoningConfig)
+                            Toggle("", isOn: $showReasoningConfig)
                                 .toggleStyle(.switch)
+                                .labelsHidden()
+                                .controlSize(.small)
+                            Text(L10n.overrideReasoning)
                             Spacer()
                             Button(L10n.autoDetect) {
                                 if !baseURL.isEmpty {
@@ -476,8 +479,13 @@ public struct ProviderFormView: View {
                         if showReasoningConfig {
                             VStack(alignment: .leading, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Toggle(L10n.enableThinking, isOn: $supportsThinking)
-                                        .toggleStyle(.switch)
+                                    HStack(spacing: 8) {
+                                        Toggle("", isOn: $supportsThinking)
+                                            .toggleStyle(.switch)
+                                            .labelsHidden()
+                                            .controlSize(.small)
+                                        Text(L10n.enableThinking)
+                                    }
                                     Text(L10n.thinkingDesc)
                                         .font(.caption).foregroundColor(.secondary)
 
@@ -494,8 +502,13 @@ public struct ProviderFormView: View {
                                 Divider()
 
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Toggle(L10n.enableEffort, isOn: $supportsEffort)
-                                        .toggleStyle(.switch)
+                                    HStack(spacing: 8) {
+                                        Toggle("", isOn: $supportsEffort)
+                                            .toggleStyle(.switch)
+                                            .labelsHidden()
+                                            .controlSize(.small)
+                                        Text(L10n.enableEffort)
+                                    }
                                     Text(L10n.effortDesc)
                                         .font(.caption).foregroundColor(.secondary)
 
