@@ -420,18 +420,19 @@ private struct ServerSettingsView: View {
                     }
                 }
 
-                HStack(spacing: 8) {
-                    Text(L10n.codexDebugPort)
-                        .frame(width: 96, alignment: .leading)
-                    TextField("", value: Binding(
-                        get: { appState.codexDebugPort },
-                        set: { appState.codexDebugPort = $0 }
-                    ), format: .number.grouping(.never))
-                        .textFieldStyle(.roundedBorder)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(L10n.codexDebugPort)
+                            .frame(width: 96, alignment: .leading)
+                        TextField("", value: Binding(
+                            get: { appState.codexDebugPort },
+                            set: { appState.codexDebugPort = $0 }
+                        ), format: .number.grouping(.never))
+                            .textFieldStyle(.roundedBorder)
+                    }
                     Text(L10n.codexDebugPortDesc)
                         .font(.caption)
                         .foregroundColor(.secondary)
-                        .frame(width: 112, alignment: .leading)
                 }
             } header: {
                 Label(L10n.codexEnhancements, systemImage: "wand.and.stars")
