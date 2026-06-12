@@ -345,7 +345,6 @@ public struct ProviderFormView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title3)
-                        .foregroundColor(.red)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -363,7 +362,6 @@ public struct ProviderFormView: View {
                 } label: {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.title3)
-                        .foregroundColor(.green)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -614,7 +612,6 @@ public struct ProviderFormView: View {
                                 } label: {
                                     Image(systemName: "trash")
                                         .font(.callout)
-                                        .foregroundColor(.red)
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)

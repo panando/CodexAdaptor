@@ -16,14 +16,13 @@ public struct ConfigurationView: View {
             // Sidebar
             List(selection: $selectedTab) {
                 Section {
+                    sidebarItem(tab: .providers, icon: "server.rack", title: L10n.providers)
+
                     sidebarItem(tab: .server, icon: "network", title: L10n.server) {
                         Circle()
                             .fill(appState.isRunning ? Color.green : Color.red)
                             .frame(width: 7, height: 7)
                     }
-
-                    sidebarItem(tab: .providers, icon: "server.rack", title: L10n.providers)
-
                 }
                 Section {
                     sidebarItem(tab: .help, icon: "questionmark.circle", title: L10n.help)
