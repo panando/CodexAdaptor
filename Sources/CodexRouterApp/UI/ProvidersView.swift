@@ -321,7 +321,7 @@ public struct ProviderFormView: View {
     @ViewBuilder
     private var modelEditorForm: some View {
         HStack(spacing: 12) {
-            TextField(L10n.modelAliasDesc, text: $newModelDisplayName)
+            TextField(L10n.displayNamePrompt, text: $newModelDisplayName)
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity)
@@ -580,7 +580,7 @@ public struct ProviderFormView: View {
                         // Editable model rows
                         ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, _ in
                             HStack(spacing: 12) {
-                                TextField(L10n.modelAliasDesc, text: Binding(
+                                TextField(L10n.displayNamePrompt, text: Binding(
                                     get: { modelCatalog.models[index].displayName ?? "" },
                                     set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
                                 ))
