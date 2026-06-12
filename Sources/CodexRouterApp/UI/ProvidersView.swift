@@ -280,44 +280,48 @@ public struct ProviderFormView: View {
 
     @ViewBuilder
     private var modelEditorForm: some View {
-        VStack(spacing: 8) {
-            Divider()
-
+        VStack(spacing: 0) {
             HStack(spacing: 12) {
-                // Column: Display Name (alias)
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(L10n.modelAlias)
                         .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
                     TextField("", text: $newModelDisplayName)
                         .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.leading)
                     Text(L10n.modelAliasDesc)
                         .font(.caption2).foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
 
-                // Column: Model Slug (actual model name)
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(L10n.modelSlug)
                         .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
                     TextField("", text: $newModelSlug)
                         .textFieldStyle(.roundedBorder)
+                        .font(.system(.callout, design: .monospaced))
+                        .multilineTextAlignment(.leading)
                         .autocorrectionDisabled()
                     Text(L10n.modelSlugDesc)
                         .font(.caption2).foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
 
-                // Column: Context Window
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(L10n.contextWindow)
                         .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
                     TextField("", text: $newModelContextWindow)
                         .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.leading)
                     Text(L10n.contextWindowExample)
                         .font(.caption2).foregroundColor(.secondary)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: 100)
+
+                // Spacer to match delete button column
+                Spacer().frame(width: 24)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
 
             HStack(spacing: 10) {
                 Button(L10n.cancel) {
@@ -341,17 +345,10 @@ public struct ProviderFormView: View {
                 .disabled(newModelSlug.isEmpty)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.blue.opacity(0.04))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-        )
-        .padding(.vertical, 4)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
 
     private func resetModelForm() {
@@ -522,57 +519,80 @@ public struct ProviderFormView: View {
                         }
                     }
 
-                    Section {
+                }
+                .formStyle(.grouped)
+                .frame(minWidth: 600)
+
+                // Custom Models — outside Form to avoid .formStyle(.grouped) alignment issues
+                VStack(alignment: .leading, spacing: 0) {
+                    // Section header
+                    Label(L10n.customModels, systemImage: "cube.box")
+                        .font(.footnote).fontWeight(.medium)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 6)
+
+                    // Content card
+                    VStack(spacing: 0) {
                         // Column headers
-                        if !modelCatalog.models.isEmpty {
-                            HStack(spacing: 12) {
-                                Text(L10n.modelAlias)
-                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Text(L10n.modelSlug)
-                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Text(L10n.contextWindow)
-                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                    .frame(width: 80, alignment: .leading)
-                                Spacer().frame(width: 28)
-                            }
-                            .padding(.horizontal, 4)
-                            .padding(.bottom, 2)
+                        HStack(spacing: 12) {
+                            Text(L10n.modelAlias)
+                                .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(L10n.modelSlug)
+                                .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(L10n.contextWindow)
+                                .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                                .frame(width: 100, alignment: .leading)
+                            Spacer().frame(width: 24)
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.top, 10)
+                        .padding(.bottom, 4)
 
-                        // Model list — directly editable
-                        ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, model in
+                        Divider().padding(.horizontal, 12)
+
+                        // Editable model rows
+                        ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, _ in
                             HStack(spacing: 12) {
-                                // Model alias
-                                TextField("", text: Binding(
-                                    get: { modelCatalog.models[index].displayName ?? "" },
-                                    set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.leading)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    TextField("", text: Binding(
+                                        get: { modelCatalog.models[index].displayName ?? "" },
+                                        set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.leading)
+                                    Text(L10n.modelAliasDesc)
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
                                 .frame(maxWidth: .infinity)
 
-                                // Actual model name
-                                TextField("", text: Binding(
-                                    get: { modelCatalog.models[index].model },
-                                    set: { modelCatalog.models[index].model = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.callout, design: .monospaced))
-                                .multilineTextAlignment(.leading)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    TextField("", text: Binding(
+                                        get: { modelCatalog.models[index].model },
+                                        set: { modelCatalog.models[index].model = $0 }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(.callout, design: .monospaced))
+                                    .multilineTextAlignment(.leading)
+                                    Text(L10n.modelSlugDesc)
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
                                 .frame(maxWidth: .infinity)
 
-                                // Context window
-                                TextField("", text: Binding(
-                                    get: { modelCatalog.models[index].contextWindow.map { String($0) } ?? "" },
-                                    set: { modelCatalog.models[index].contextWindow = UInt64($0) }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.leading)
-                                .frame(width: 80)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    TextField("", text: Binding(
+                                        get: { modelCatalog.models[index].contextWindow.map { String($0) } ?? "" },
+                                        set: { modelCatalog.models[index].contextWindow = UInt64($0) }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.leading)
+                                    Text(L10n.contextWindowExample)
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                                .frame(width: 100)
 
-                                // Delete
                                 Button {
                                     modelIndexToDelete = index
                                 } label: {
@@ -581,14 +601,22 @@ public struct ProviderFormView: View {
                                 .buttonStyle(.borderless)
                                 .controlSize(.small)
                                 .help(L10n.removeModel)
+                                .frame(width: 24)
                             }
-                            .padding(.vertical, 2)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+
+                            if index < modelCatalog.models.count - 1 {
+                                Divider().padding(.horizontal, 12)
+                            }
                         }
 
-                        // Inline form for adding new model
                         if showAddModel {
+                            Divider().padding(.horizontal, 12)
                             modelEditorForm
                         }
+
+                        Divider().padding(.horizontal, 12)
 
                         if !showAddModel {
                             Button {
@@ -598,16 +626,27 @@ public struct ProviderFormView: View {
                                 Label(L10n.addModel, systemImage: "plus.circle")
                             }
                             .buttonStyle(.borderless)
-                            .padding(.top, 4)
+                            .controlSize(.small)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
                         }
-                    } header: {
-                        Label(L10n.customModels, systemImage: "cube.box")
-                    } footer: {
-                        Text(L10n.modelFooter)
                     }
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+                    )
+                    .padding(.horizontal, 16)
+
+                    // Footer
+                    Text(L10n.modelFooter)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 6)
                 }
-                .formStyle(.grouped)
-                .frame(minWidth: 600)
+                .padding(.vertical, 8)
             }
 
             Divider()
