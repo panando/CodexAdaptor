@@ -280,53 +280,71 @@ public struct ProviderFormView: View {
 
     @ViewBuilder
     private var modelEditorForm: some View {
-        HStack(spacing: 12) {
-            TextField(L10n.modelAliasDesc, text: $newModelDisplayName)
-                .textFieldStyle(.roundedBorder)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity)
-
-            TextField(L10n.modelSlugDesc, text: $newModelSlug)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(.callout, design: .monospaced))
-                .multilineTextAlignment(.leading)
-                .autocorrectionDisabled()
-                .frame(maxWidth: .infinity)
-
-            TextField(L10n.contextWindowExample, text: $newModelContextWindow)
-                .textFieldStyle(.roundedBorder)
-                .multilineTextAlignment(.leading)
-                .frame(width: 100)
-
-            HStack(spacing: 4) {
-                Button {
-                    resetModelForm()
-                    showAddModel = false
-                } label: {
-                    Image(systemName: "xmark.circle")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-
-                Button {
-                    guard !newModelSlug.isEmpty else { return }
-                    let entry = ModelCatalogEntry(
-                        model: newModelSlug,
-                        displayName: newModelDisplayName.isEmpty ? nil : newModelDisplayName,
-                        contextWindow: UInt64(newModelContextWindow)
-                    )
-                    modelCatalog.models.append(entry)
-                    resetModelForm()
-                    showAddModel = false
-                } label: {
-                    Image(systemName: "checkmark.circle.fill")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .disabled(newModelSlug.isEmpty)
+        VStack(alignment: .leading, spacing: 2) {
+            // Labels row
+            HStack(spacing: 12) {
+                Text(L10n.modelAlias)
+                    .font(.caption).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(L10n.modelSlug)
+                    .font(.caption).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(L10n.contextWindow)
+                    .font(.caption).foregroundColor(.secondary)
+                    .frame(width: 100, alignment: .leading)
+                Spacer().frame(width: 44)
             }
-            .frame(width: 44)
+
+            // Input row
+            HStack(spacing: 12) {
+                TextField(L10n.modelAliasDesc, text: $newModelDisplayName)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity)
+
+                TextField(L10n.modelSlugDesc, text: $newModelSlug)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.callout, design: .monospaced))
+                    .multilineTextAlignment(.leading)
+                    .autocorrectionDisabled()
+                    .frame(maxWidth: .infinity)
+
+                TextField(L10n.contextWindowExample, text: $newModelContextWindow)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.leading)
+                    .frame(width: 100)
+
+                HStack(spacing: 4) {
+                    Button {
+                        resetModelForm()
+                        showAddModel = false
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+
+                    Button {
+                        guard !newModelSlug.isEmpty else { return }
+                        let entry = ModelCatalogEntry(
+                            model: newModelSlug,
+                            displayName: newModelDisplayName.isEmpty ? nil : newModelDisplayName,
+                            contextWindow: UInt64(newModelContextWindow)
+                        )
+                        modelCatalog.models.append(entry)
+                        resetModelForm()
+                        showAddModel = false
+                    } label: {
+                        Image(systemName: "checkmark.circle.fill")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(newModelSlug.isEmpty)
+                }
+                .frame(width: 44)
+            }
         }
+        .padding(.vertical, 2)
     }
 
     private func resetModelForm() {
@@ -499,58 +517,61 @@ public struct ProviderFormView: View {
 
                     // Custom Models
                     Section {
-                        // Column headers
-                        HStack(spacing: 12) {
-                            Text(L10n.modelAlias)
-                                .font(.caption).foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text(L10n.modelSlug)
-                                .font(.caption).foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text(L10n.contextWindow)
-                                .font(.caption).foregroundColor(.secondary)
-                                .frame(width: 100, alignment: .leading)
-                            Spacer().frame(width: 24)
-                        }
-
-                        // Editable model rows
                         ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, _ in
-                            HStack(spacing: 12) {
-                                TextField(L10n.modelAliasDesc, text: Binding(
-                                    get: { modelCatalog.models[index].displayName ?? "" },
-                                    set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity)
-
-                                TextField(L10n.modelSlugDesc, text: Binding(
-                                    get: { modelCatalog.models[index].model },
-                                    set: { modelCatalog.models[index].model = $0 }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.callout, design: .monospaced))
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity)
-
-                                TextField(L10n.contextWindowExample, text: Binding(
-                                    get: { modelCatalog.models[index].contextWindow.map { String($0) } ?? "" },
-                                    set: { modelCatalog.models[index].contextWindow = UInt64($0) }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.leading)
-                                .frame(width: 100)
-
-                                Button {
-                                    modelIndexToDelete = index
-                                } label: {
-                                    Image(systemName: "trash")
+                            VStack(alignment: .leading, spacing: 2) {
+                                // Labels row
+                                HStack(spacing: 12) {
+                                    Text(L10n.modelAlias)
+                                        .font(.caption).foregroundColor(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Text(L10n.modelSlug)
+                                        .font(.caption).foregroundColor(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Text(L10n.contextWindow)
+                                        .font(.caption).foregroundColor(.secondary)
+                                        .frame(width: 100, alignment: .leading)
+                                    Spacer().frame(width: 24)
                                 }
-                                .buttonStyle(.borderless)
-                                .controlSize(.small)
-                                .help(L10n.removeModel)
-                                .frame(width: 24)
+
+                                // Input row
+                                HStack(spacing: 12) {
+                                    TextField(L10n.modelAliasDesc, text: Binding(
+                                        get: { modelCatalog.models[index].displayName ?? "" },
+                                        set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity)
+
+                                    TextField(L10n.modelSlugDesc, text: Binding(
+                                        get: { modelCatalog.models[index].model },
+                                        set: { modelCatalog.models[index].model = $0 }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(.callout, design: .monospaced))
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity)
+
+                                    TextField(L10n.contextWindowExample, text: Binding(
+                                        get: { modelCatalog.models[index].contextWindow.map { String($0) } ?? "" },
+                                        set: { modelCatalog.models[index].contextWindow = UInt64($0) }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(width: 100)
+
+                                    Button {
+                                        modelIndexToDelete = index
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .controlSize(.small)
+                                    .help(L10n.removeModel)
+                                    .frame(width: 24)
+                                }
                             }
+                            .padding(.vertical, 2)
                         }
 
                         if showAddModel {
