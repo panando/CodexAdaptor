@@ -349,6 +349,28 @@ public actor RequestHandler {
         result.removeValue(forKey: "reasoning")
         result.removeValue(forKey: "verbosity")
         result.removeValue(forKey: "instructions")
+        result.removeValue(forKey: "prompt_cache_key")
+
+        // Convert tools from Responses API format to Chat Completions format.
+        // Responses: {"type":"function","name":"...","description":"...","parameters":{...}}
+        // Chat: {"type":"function","function":{"name":"...","description":"...","parameters":{...}}}
+        if let tools = result["tools"] as? [[String: Any]] {
+            result["tools"] = tools.map { tool in
+                var t = tool
+                if let type = t["type"] as? String, type == "function" {
+                    // If already has function wrapper, keep as-is
+                    if t["function"] != nil { return t }
+                    // Build function wrapper from flat Responses format
+                    var function: [String: Any] = [:]
+                    if let name = t.removeValue(forKey: "name") { function["name"] = name }
+                    if let desc = t.removeValue(forKey: "description") { function["description"] = desc }
+                    if let params = t.removeValue(forKey: "parameters") { function["parameters"] = params }
+                    if let strict = t.removeValue(forKey: "strict") { function["strict"] = strict }
+                    t["function"] = function
+                }
+                return t
+            }
+        }
 
         // Rename max_output_tokens to max_tokens
         if let maxOutputTokens = json["max_output_tokens"] {
