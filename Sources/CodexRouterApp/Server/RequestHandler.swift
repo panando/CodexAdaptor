@@ -175,6 +175,8 @@ public actor RequestHandler {
             body: body
         )
 
+        NSLog("[CodexRouter] Upstream status: \(streamingResponse.status.code)")
+
         // Build response headers
         var responseHeaders = HTTPFields()
         responseHeaders[.contentType] = "text/event-stream"
@@ -185,13 +187,25 @@ public actor RequestHandler {
             // Create a stateful transformer for this stream
             let transformer = ChatToResponsesStreamTransformer()
 
+            var isFirstChunk = true
+
             // Create an async sequence that transforms and yields events
             let eventSequence = streamingResponse.events.map { (data: Data) -> ByteBuffer in
+                if isFirstChunk {
+                    isFirstChunk = false
+                    if let raw = String(data: data, encoding: .utf8) {
+                        NSLog("[CodexRouter] First raw upstream chunk: \(raw.prefix(500))")
+                    }
+                }
                 if let transformedData = await transformer.transform(data) {
-                    NSLog("[CodexRouter] Transformed \(data.count) bytes -> \(transformedData.count) bytes")
+                    if let transformed = String(data: transformedData, encoding: .utf8) {
+                        NSLog("[CodexRouter] Transformed output: \(transformed.prefix(500))")
+                    }
                     return ByteBuffer(data: transformedData)
                 } else {
-                    NSLog("[CodexRouter] Transformation returned nil, passing through \(data.count) bytes")
+                    if let raw = String(data: data, encoding: .utf8) {
+                        NSLog("[CodexRouter] Transform returned nil, raw upstream: \(raw.prefix(500))")
+                    }
                     return ByteBuffer(data: data)
                 }
             }
@@ -307,6 +321,30 @@ public actor RequestHandler {
             result["messages"] = messages
             result.removeValue(forKey: "input")
         }
+
+        // Handle instructions as system message (prepended before other messages)
+        if let instructions = json["instructions"] as? String {
+            var messages = (result["messages"] as? [[String: Any]]) ?? []
+            messages.insert(["role": "system", "content": instructions], at: 0)
+            result["messages"] = messages
+            result.removeValue(forKey: "instructions")
+        }
+
+        // Handle developer role → system (most Chat APIs don't support "developer")
+        if let messages = result["messages"] as? [[String: Any]] {
+            result["messages"] = messages.map { msg in
+                var m = msg
+                if m["role"] as? String == "developer" { m["role"] = "system" }
+                return m
+            }
+        }
+
+        // Remove Responses API-only fields that upstream Chat APIs don't understand
+        result.removeValue(forKey: "client_metadata")
+        result.removeValue(forKey: "store")
+        result.removeValue(forKey: "include")
+        result.removeValue(forKey: "disable_response_storage")
+        result.removeValue(forKey: "model_reasoning_effort")
 
         // Rename max_output_tokens to max_tokens
         if let maxOutputTokens = json["max_output_tokens"] {
