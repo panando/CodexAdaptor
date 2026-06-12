@@ -354,21 +354,10 @@ public actor RequestHandler {
         // Convert tools from Responses API format to Chat Completions format.
         // Responses: {"type":"function","name":"...","description":"...","parameters":{...}}
         // Chat: {"type":"function","function":{"name":"...","description":"...","parameters":{...}}}
+        // Following cc-switch's transform_codex_chat.rs:1095-1130
         if let tools = result["tools"] as? [[String: Any]] {
-            result["tools"] = tools.map { tool in
-                var t = tool
-                if let type = t["type"] as? String, type == "function" {
-                    // If already has function wrapper, keep as-is
-                    if t["function"] != nil { return t }
-                    // Build function wrapper from flat Responses format
-                    var function: [String: Any] = [:]
-                    if let name = t.removeValue(forKey: "name") { function["name"] = name }
-                    if let desc = t.removeValue(forKey: "description") { function["description"] = desc }
-                    if let params = t.removeValue(forKey: "parameters") { function["parameters"] = params }
-                    if let strict = t.removeValue(forKey: "strict") { function["strict"] = strict }
-                    t["function"] = function
-                }
-                return t
+            result["tools"] = tools.flatMap { tool -> [[String: Any]] in
+                convertToolToChat(tool)
             }
         }
 
@@ -379,5 +368,99 @@ public actor RequestHandler {
         }
 
         return result
+    }
+
+    /// Convert a Responses API tool to Chat Completions format.
+    /// Following cc-switch's transform_codex_chat.rs approach.
+    private func convertToolToChat(_ tool: [String: Any]) -> [[String: Any]] {
+        guard let type = tool["type"] as? String else { return [] }
+
+        switch type {
+        case "function":
+            // Already has function wrapper → pass through
+            if tool["function"] != nil { return [tool] }
+            // Flat Responses format → wrap in function
+            var t = tool
+            var function: [String: Any] = [:]
+            if let name = t.removeValue(forKey: "name") { function["name"] = name }
+            if let desc = t.removeValue(forKey: "description") { function["description"] = desc }
+            if let params = t.removeValue(forKey: "parameters") { function["parameters"] = params }
+            if let strict = t.removeValue(forKey: "strict") { function["strict"] = strict }
+            t["function"] = function
+            return [t]
+
+        case "custom":
+            // Custom tools become function tools with an "input" string param
+            let toolName = (tool["name"] as? String) ?? "custom_tool"
+            let toolDesc: String
+            if let data = try? JSONSerialization.data(withJSONObject: tool, options: .prettyPrinted),
+               let jsonStr = String(data: data, encoding: .utf8) {
+                toolDesc = "Custom tool: \(toolName)\n\nOriginal tool definition:\n\(jsonStr)"
+            } else {
+                toolDesc = "Custom tool: \(toolName)"
+            }
+            return [[
+                "type": "function",
+                "function": [
+                    "name": toolName,
+                    "description": toolDesc,
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "input": [
+                                "type": "string",
+                                "description": "The input to pass to the custom tool"
+                            ]
+                        ],
+                        "required": ["input"]
+                    ]
+                ]
+            ]]
+
+        case "namespace":
+            // Flatten namespace: convert each child tool, prefixing names
+            guard let children = tool["tools"] as? [[String: Any]] else { return [] }
+            let namespace = (tool["name"] as? String) ?? ""
+            return children.flatMap { child -> [[String: Any]] in
+                let converted = convertToolToChat(child)
+                return converted.map { c in
+                    var ct = c
+                    if var funcObj = ct["function"] as? [String: Any],
+                       let name = funcObj["name"] as? String {
+                        let prefix = namespace.isEmpty ? "" : "\(namespace)__"
+                        funcObj["name"] = "\(prefix)\(name)"
+                        ct["function"] = funcObj
+                    }
+                    return ct
+                }
+            }
+
+        case "tool_search":
+            // Web search → function tool with query + limit params
+            return [[
+                "type": "function",
+                "function": [
+                    "name": "tool_search",
+                    "description": "Search the web for information",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "query": [
+                                "type": "string",
+                                "description": "The search query"
+                            ],
+                            "limit": [
+                                "type": "integer",
+                                "description": "Max number of results"
+                            ]
+                        ],
+                        "required": ["query"]
+                    ]
+                ]
+            ]]
+
+        default:
+            return []
+        }
     }
 }
