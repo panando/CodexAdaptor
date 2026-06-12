@@ -75,12 +75,25 @@ public class CodexConfigService {
             return nil
         }
 
+        // Read reasoning config
+        let supportsThinkingStr = extractValue(from: sectionContent, key: "supports_thinking")
+        let supportsEffortStr = extractValue(from: sectionContent, key: "supports_effort")
+        let rc: ReasoningConfig? = (supportsThinkingStr != nil || supportsEffortStr != nil) ? ReasoningConfig(
+            supportsThinking: supportsThinkingStr == "true" ? true : (supportsThinkingStr == "false" ? false : nil),
+            supportsEffort: supportsEffortStr == "true" ? true : (supportsEffortStr == "false" ? false : nil),
+            thinkingParam: extractValue(from: sectionContent, key: "thinking_param"),
+            effortParam: nil,
+            effortValueMode: extractValue(from: sectionContent, key: "effort_value_mode"),
+            outputFormat: extractValue(from: sectionContent, key: "reasoning_output_format")
+        ) : nil
+
         return UpstreamProvider(
             id: providerId,
             name: name,
             baseURL: baseURL,
             usesChatCompletions: usesChatCompletions,
-            bearerToken: bearerToken
+            bearerToken: bearerToken,
+            reasoningConfig: rc
         )
     }
 
@@ -121,6 +134,18 @@ public class CodexConfigService {
                 // Read model catalog if exists (from provider-specific JSON file)
                 let modelCatalog = try? readModelCatalog(for: providerId)
 
+                // Read reasoning config
+                let supportsThinkingStr = extractValue(from: sectionContent, key: "supports_thinking")
+                let supportsEffortStr = extractValue(from: sectionContent, key: "supports_effort")
+                let reasoningConfig = (supportsThinkingStr != nil || supportsEffortStr != nil) ? ReasoningConfig(
+                    supportsThinking: supportsThinkingStr == "true" ? true : (supportsThinkingStr == "false" ? false : nil),
+                    supportsEffort: supportsEffortStr == "true" ? true : (supportsEffortStr == "false" ? false : nil),
+                    thinkingParam: extractValue(from: sectionContent, key: "thinking_param"),
+                    effortParam: nil,
+                    effortValueMode: extractValue(from: sectionContent, key: "effort_value_mode"),
+                    outputFormat: extractValue(from: sectionContent, key: "reasoning_output_format")
+                ) : nil
+
                 let provider = CodexModelProvider(
                     id: providerId,
                     name: name ?? providerId,
@@ -129,7 +154,8 @@ public class CodexConfigService {
                     upstreamWireAPI: upstreamWireAPI,
                     apiKey: apiKey,
                     bearerToken: bearerToken,
-                    modelCatalog: modelCatalog
+                    modelCatalog: modelCatalog,
+                    reasoningConfig: reasoningConfig
                 )
                 providers.append(provider)
             }
@@ -615,6 +641,23 @@ public class CodexConfigService {
         if let bearerToken = provider.bearerToken, !bearerToken.isEmpty {
             newSection += "experimental_bearer_token = \"\(bearerToken)\"\n"
         }
+        if let rc = provider.reasoningConfig {
+            if let supportsThinking = rc.supportsThinking {
+                newSection += "supports_thinking = \(supportsThinking ? "true" : "false")\n"
+            }
+            if let param = rc.thinkingParam {
+                newSection += "thinking_param = \"\(param)\"\n"
+            }
+            if let effort = rc.supportsEffort {
+                newSection += "supports_effort = \(effort ? "true" : "false")\n"
+            }
+            if let mode = rc.effortValueMode {
+                newSection += "effort_value_mode = \"\(mode)\"\n"
+            }
+            if let format = rc.outputFormat {
+                newSection += "reasoning_output_format = \"\(format)\"\n"
+            }
+        }
 
         result = sectionRegex.stringByReplacingMatches(in: result, options: [], range: contentRange, withTemplate: newSection)
 
@@ -635,6 +678,23 @@ public class CodexConfigService {
         }
         if let bearerToken = provider.bearerToken, !bearerToken.isEmpty {
             newSection += "experimental_bearer_token = \"\(bearerToken)\"\n"
+        }
+        if let rc = provider.reasoningConfig {
+            if let supportsThinking = rc.supportsThinking {
+                newSection += "supports_thinking = \(supportsThinking ? "true" : "false")\n"
+            }
+            if let param = rc.thinkingParam {
+                newSection += "thinking_param = \"\(param)\"\n"
+            }
+            if let effort = rc.supportsEffort {
+                newSection += "supports_effort = \(effort ? "true" : "false")\n"
+            }
+            if let mode = rc.effortValueMode {
+                newSection += "effort_value_mode = \"\(mode)\"\n"
+            }
+            if let format = rc.outputFormat {
+                newSection += "reasoning_output_format = \"\(format)\"\n"
+            }
         }
 
         // Find where to insert (after [model_providers] if exists, otherwise at end)
@@ -727,6 +787,8 @@ public struct CodexModelProvider: Identifiable, Equatable {
     public var bearerToken: String?
     /// User's model catalog configuration (from settings.modelCatalog)
     public var modelCatalog: ModelCatalog?
+    /// Reasoning configuration for this provider
+    public var reasoningConfig: ReasoningConfig?
 
     public init(
         id: String,
@@ -736,7 +798,8 @@ public struct CodexModelProvider: Identifiable, Equatable {
         upstreamWireAPI: String = "chat",
         apiKey: String? = nil,
         bearerToken: String? = nil,
-        modelCatalog: ModelCatalog? = nil
+        modelCatalog: ModelCatalog? = nil,
+        reasoningConfig: ReasoningConfig? = nil
     ) {
         self.id = id
         self.name = name
@@ -746,6 +809,7 @@ public struct CodexModelProvider: Identifiable, Equatable {
         self.apiKey = apiKey
         self.bearerToken = bearerToken
         self.modelCatalog = modelCatalog
+        self.reasoningConfig = reasoningConfig
     }
 
     public var isUsingProxy: Bool {
@@ -760,7 +824,8 @@ public struct CodexModelProvider: Identifiable, Equatable {
         lhs.upstreamWireAPI == rhs.upstreamWireAPI &&
         lhs.apiKey == rhs.apiKey &&
         lhs.bearerToken == rhs.bearerToken &&
-        lhs.modelCatalog == rhs.modelCatalog
+        lhs.modelCatalog == rhs.modelCatalog &&
+        lhs.reasoningConfig == rhs.reasoningConfig
     }
 }
 
@@ -790,18 +855,21 @@ public struct UpstreamProvider: Sendable {
     public let baseURL: String
     public let usesChatCompletions: Bool
     public let bearerToken: String?
+    public let reasoningConfig: ReasoningConfig?
 
     public init(
         id: String,
         name: String,
         baseURL: String,
         usesChatCompletions: Bool,
-        bearerToken: String? = nil
+        bearerToken: String? = nil,
+        reasoningConfig: ReasoningConfig? = nil
     ) {
         self.id = id
         self.name = name
         self.baseURL = baseURL
         self.usesChatCompletions = usesChatCompletions
         self.bearerToken = bearerToken
+        self.reasoningConfig = reasoningConfig
     }
 }

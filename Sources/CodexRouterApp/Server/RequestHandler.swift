@@ -2,28 +2,22 @@ import Foundation
 import Hummingbird
 import NIOCore
 import CodexRouterCore
-import CodexRouterDB
 
 /// Handles incoming proxy requests and forwards them to upstream providers.
+/// Uses CodexConfigService as the SINGLE source of truth for configuration.
 public actor RequestHandler {
-    private let database: Database
-    private let providerRouter: ProviderRouter
-    private let failoverManager: FailoverManager
-    private let httpClient: HTTPClient
     private let reasoningRectifier: ReasoningRectifier
     private let chatToResponsesTransformer: ChatToResponsesTransformer
     private let responsesToChatTransformer: ResponsesToChatTransformer
     private let sseTransformer: SSEStreamTransformer
+    private let httpClient: HTTPClient
 
-    public init(database: Database, providerRouter: ProviderRouter) {
-        self.database = database
-        self.providerRouter = providerRouter
-        self.failoverManager = FailoverManager(database: database)
-        self.httpClient = HTTPClient()
+    public init() {
         self.reasoningRectifier = ReasoningRectifier()
         self.chatToResponsesTransformer = ChatToResponsesTransformer()
         self.responsesToChatTransformer = ResponsesToChatTransformer()
         self.sseTransformer = SSEStreamTransformer()
+        self.httpClient = HTTPClient()
     }
 
     /// Handle a proxy request.
@@ -31,28 +25,12 @@ public actor RequestHandler {
         request: Request,
         endpoint: ProxyEndpoint
     ) async throws -> Response {
-        // Get current provider
-        guard let provider = try getCurrentProvider() else {
+        // Get current upstream provider from Codex config (SINGLE SOURCE OF TRUTH)
+        guard let provider = try CodexConfigService.shared.getCurrentUpstreamProvider() else {
             return Response(
                 status: .serviceUnavailable,
-                body: .init(byteBuffer: ByteBuffer(string: #"{"error":"No provider configured"}"#))
+                body: .init(byteBuffer: ByteBuffer(string: #"{"error":"No provider configured in ~/.codex/config.toml"}"#))
             )
-        }
-
-        // Check circuit breaker (skip for models endpoint)
-        if endpoint != .models {
-            let breaker = await providerRouter.getCircuitBreaker(for: provider.id)
-            guard await breaker.allowRequest() else {
-                // Try failover if enabled
-                if let failoverProvider = try await getFailoverProvider(excludeIds: [provider.id]) {
-                    return try await forwardRequest(request: request, provider: failoverProvider, endpoint: endpoint)
-                }
-
-                return Response(
-                    status: .serviceUnavailable,
-                    body: .init(byteBuffer: ByteBuffer(string: #"{"error":"Provider unavailable"}"#))
-                )
-            }
         }
 
         return try await forwardRequest(request: request, provider: provider, endpoint: endpoint)
@@ -61,31 +39,23 @@ public actor RequestHandler {
     /// Forward request to upstream provider.
     private func forwardRequest(
         request: Request,
-        provider: Provider,
+        provider: UpstreamProvider,
         endpoint: ProxyEndpoint
     ) async throws -> Response {
-        guard let baseURL = provider.baseURL else {
-            return Response(
-                status: .badGateway,
-                body: .init(byteBuffer: ByteBuffer(string: #"{"error":"Provider has no base URL"}"#))
-            )
-        }
-
         // Build upstream URL
-        let upstreamURL = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            + endpoint.upstreamPath(provider: provider)
+        let upstreamURL = provider.baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            + endpoint.upstreamPath(usesChatCompletions: provider.usesChatCompletions)
+
+        NSLog("[CodexRouter] Upstream URL: \(upstreamURL)")
+        NSLog("[CodexRouter] usesChatCompletions: \(provider.usesChatCompletions)")
 
         // Build headers
         var headers: [String: String] = [:]
         headers["Content-Type"] = "application/json"
 
-        // Get API key from Keychain
-        if let apiKey = try? KeychainService.shared.getAPIKey(for: provider.id) {
-            headers["Authorization"] = "Bearer \(apiKey)"
-        }
-
-        if let customUserAgent = provider.meta?.customUserAgent {
-            headers["User-Agent"] = customUserAgent
+        // Add bearer token if configured
+        if let token = provider.bearerToken {
+            headers["Authorization"] = "Bearer \(token)"
         }
 
         // Handle GET requests (models endpoint)
@@ -118,16 +88,33 @@ public actor RequestHandler {
         }
         if bodyBuffer.readableBytes > 0 {
             requestBody = Data(buffer: bodyBuffer)
+            if let bodyString = String(data: requestBody!, encoding: .utf8) {
+                NSLog("[CodexRouter] Request body: \(bodyString.prefix(500))")
+            }
         }
 
-        // Apply reasoning rectification
+        // Apply reasoning rectification and transform request if needed
         var requestJSON: [String: Any]?
         if let data = requestBody,
            var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let platform = ReasoningPlatform.detect(from: provider.baseURL)
-            reasoningRectifier.rectifyRequest(&json, provider: provider, platform: platform)
+            if let rc = provider.reasoningConfig {
+                reasoningRectifier.rectifyRequestWithConfig(&json, config: rc)
+            } else {
+                let platform = ReasoningPlatform.detect(from: provider.baseURL)
+                reasoningRectifier.rectifyRequest(&json, provider: nil, platform: platform)
+            }
+
+            // Transform request from Responses API to Chat Completions format if needed
+            if endpoint == .responses && provider.usesChatCompletions {
+                NSLog("[CodexRouter] Transforming Responses request to Chat Completions")
+                json = transformResponsesRequestToChat(json)
+            }
+
             requestJSON = json
             requestBody = try? JSONSerialization.data(withJSONObject: json)
+            if let body = requestBody, let str = String(data: body, encoding: .utf8) {
+                NSLog("[CodexRouter] Transformed request body: \(str.prefix(500))")
+            }
         }
 
         // Determine if streaming
@@ -151,9 +138,6 @@ public actor RequestHandler {
                     body: requestBody
                 )
 
-                // Record success
-                await recordSuccess(providerId: provider.id)
-
                 // Transform response if needed
                 let transformedData = transformResponse(data: data, provider: provider, endpoint: endpoint)
 
@@ -163,14 +147,6 @@ public actor RequestHandler {
                 )
             }
         } catch {
-            // Record failure
-            await recordFailure(providerId: provider.id, error: error.localizedDescription)
-
-            // Try failover
-            if let failoverProvider = try await getFailoverProvider(excludeIds: [provider.id]) {
-                return try await forwardRequest(request: request, provider: failoverProvider, endpoint: endpoint)
-            }
-
             return Response(
                 status: .badGateway,
                 body: .init(byteBuffer: ByteBuffer(string: #"{"error":"\#(error.localizedDescription)"}"#))
@@ -183,47 +159,91 @@ public actor RequestHandler {
         url: String,
         headers: [String: String],
         body: Data?,
-        provider: Provider,
+        provider: UpstreamProvider,
         endpoint: ProxyEndpoint
     ) async throws -> Response {
-        // For now, return a simple streaming response
-        // Full SSE streaming implementation would require more complex handling
-        let status: HTTPResponse.Status = .ok
-        var responseBody = ByteBuffer()
+        // Determine if we need to transform the stream
+        let needsTransformation = provider.usesChatCompletions && endpoint == .responses
 
-        _ = try await httpClient.sendStreaming(
+        NSLog("[CodexRouter] Streaming request to \(url), needsTransformation: \(needsTransformation)")
+
+        // Get the streaming response from the upstream
+        let streamingResponse = try await httpClient.sendStreaming(
             url: url,
             method: .post,
             headers: headers,
             body: body
-        ) { data in
-            // Transform and accumulate streaming data
-            responseBody.writeBytes(data)
-        }
-
-        await recordSuccess(providerId: provider.id)
-
-        return Response(
-            status: status,
-            body: .init(byteBuffer: responseBody)
         )
+
+        // Build response headers
+        var responseHeaders = HTTPFields()
+        responseHeaders[.contentType] = "text/event-stream"
+        responseHeaders[.cacheControl] = "no-cache"
+        responseHeaders[.connection] = "keep-alive"
+
+        if needsTransformation {
+            // Create a stateful transformer for this stream
+            let transformer = ChatToResponsesStreamTransformer()
+
+            // Create an async sequence that transforms and yields events
+            let eventSequence = streamingResponse.events.map { (data: Data) -> ByteBuffer in
+                if let transformedData = await transformer.transform(data) {
+                    NSLog("[CodexRouter] Transformed \(data.count) bytes -> \(transformedData.count) bytes")
+                    return ByteBuffer(data: transformedData)
+                } else {
+                    NSLog("[CodexRouter] Transformation returned nil, passing through \(data.count) bytes")
+                    return ByteBuffer(data: data)
+                }
+            }
+
+            let streamingBody = ResponseBody(asyncSequence: eventSequence)
+
+            return Response(
+                status: streamingResponse.status,
+                headers: responseHeaders,
+                body: streamingBody
+            )
+        } else {
+            // No transformation needed - pass through
+            let eventSequence = streamingResponse.events.map { (data: Data) -> ByteBuffer in
+                return ByteBuffer(data: data)
+            }
+
+            let streamingBody = ResponseBody(asyncSequence: eventSequence)
+
+            return Response(
+                status: streamingResponse.status,
+                headers: responseHeaders,
+                body: streamingBody
+            )
+        }
     }
 
     /// Transform response based on endpoint and provider.
-    private func transformResponse(data: Data, provider: Provider, endpoint: ProxyEndpoint) -> Data {
+    private func transformResponse(data: Data, provider: UpstreamProvider, endpoint: ProxyEndpoint) -> Data {
         guard var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return data
         }
 
-        let platform = ReasoningPlatform.detect(from: provider.baseURL)
-
         // Apply reasoning rectification to response
-        reasoningRectifier.rectifyResponse(&json, provider: provider, platform: platform)
+        if let rc = provider.reasoningConfig {
+            reasoningRectifier.rectifyResponseWithConfig(&json, config: rc)
+        } else {
+            let platform = ReasoningPlatform.detect(from: provider.baseURL)
+            reasoningRectifier.rectifyResponse(&json, provider: nil, platform: platform)
+        }
 
         // Transform format if needed
         if provider.usesChatCompletions && endpoint == .responses {
             // Convert Chat Completions to Responses format
-            // This is handled by the transformer
+            do {
+                let chatResponse = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+                let responsesAPI = chatToResponsesTransformer.transform(chatResponse: chatResponse)
+                return try JSONEncoder().encode(responsesAPI)
+            } catch {
+                NSLog("[CodexRouter] Failed to transform Chat to Responses: \(error)")
+                return data
+            }
         } else if !provider.usesChatCompletions && endpoint == .chatCompletions {
             // Convert Responses to Chat Completions format
             do {
@@ -238,39 +258,60 @@ public actor RequestHandler {
         return (try? JSONSerialization.data(withJSONObject: json)) ?? data
     }
 
-    /// Get current provider.
-    private func getCurrentProvider() throws -> Provider? {
-        let dao = ProviderDAO(database)
-        return try dao.getCurrent()
-    }
+    /// Transform Responses API request to Chat Completions format.
+    private func transformResponsesRequestToChat(_ json: [String: Any]) -> [String: Any] {
+        var result = json
 
-    /// Get failover provider.
-    private func getFailoverProvider(excludeIds: Set<String>) async throws -> Provider? {
-        let enabled = try await failoverManager.isFailoverEnabled(appType: "codex")
-        guard enabled else { return nil }
+        // Transform input to messages
+        if let input = json["input"] as? [[String: Any]] {
+            var messages: [[String: Any]] = []
 
-        return try await failoverManager.getNextProvider(
-            appType: "codex",
-            providerRouter: providerRouter,
-            excludeIds: excludeIds
-        )
-    }
+            for item in input {
+                var message: [String: Any] = [:]
 
-    /// Record successful request.
-    private func recordSuccess(providerId: String) async {
-        let breaker = await providerRouter.getCircuitBreaker(for: providerId)
-        await breaker.recordSuccess()
+                if let role = item["role"] as? String {
+                    message["role"] = role
+                }
 
-        let healthDAO = ProviderHealthDAO(database)
-        try? healthDAO.recordSuccess(providerId: providerId, appType: "codex")
-    }
+                // Handle content
+                if let content = item["content"] as? String {
+                    message["content"] = content
+                } else if let contentArray = item["content"] as? [[String: Any]] {
+                    // Convert input_text to text
+                    let convertedContent = contentArray.compactMap { block -> [String: Any]? in
+                        guard let type = block["type"] as? String else { return nil }
+                        var newBlock = block
+                        if type == "input_text" {
+                            newBlock["type"] = "text"
+                        }
+                        return newBlock
+                    }
+                    message["content"] = convertedContent
+                }
 
-    /// Record failed request.
-    private func recordFailure(providerId: String, error: String) async {
-        let breaker = await providerRouter.getCircuitBreaker(for: providerId)
-        await breaker.recordFailure()
+                // Copy tool calls and tool call ID
+                if let toolCalls = item["tool_calls"] as? [[String: Any]] {
+                    message["tool_calls"] = toolCalls
+                }
+                if let toolCallId = item["tool_call_id"] as? String {
+                    message["tool_call_id"] = toolCallId
+                }
 
-        let healthDAO = ProviderHealthDAO(database)
-        try? healthDAO.recordFailure(providerId: providerId, appType: "codex", error: error)
+                if !message.isEmpty {
+                    messages.append(message)
+                }
+            }
+
+            result["messages"] = messages
+            result.removeValue(forKey: "input")
+        }
+
+        // Rename max_output_tokens to max_tokens
+        if let maxOutputTokens = json["max_output_tokens"] {
+            result["max_tokens"] = maxOutputTokens
+            result.removeValue(forKey: "max_output_tokens")
+        }
+
+        return result
     }
 }

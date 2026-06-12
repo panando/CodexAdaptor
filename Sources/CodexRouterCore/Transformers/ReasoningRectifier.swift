@@ -1,17 +1,21 @@
 import Foundation
 
 /// Adapts reasoning parameters for different AI platforms.
-public struct ReasoningRectifier {
+public struct ReasoningRectifier: Sendable {
 
     public init() {}
 
     /// Rectify request parameters for a specific platform.
+    /// Provider is optional since we now use simplified UpstreamProvider.
     public func rectifyRequest(
         _ request: inout [String: Any],
-        provider: Provider,
+        provider: Provider?,
         platform: ReasoningPlatform
     ) {
-        guard let config = provider.meta?.codexChatReasoning else {
+        // If no provider config, use platform-based defaults
+        guard let config = provider?.meta?.codexChatReasoning else {
+            // Apply platform-specific defaults without config
+            applyPlatformDefaults(&request, platform: platform)
             return
         }
 
@@ -34,12 +38,16 @@ public struct ReasoningRectifier {
     }
 
     /// Rectify response for a specific platform.
+    /// Provider is optional since we now use simplified UpstreamProvider.
     public func rectifyResponse(
         _ response: inout [String: Any],
-        provider: Provider,
+        provider: Provider?,
         platform: ReasoningPlatform
     ) {
-        guard let config = provider.meta?.codexChatReasoning else {
+        // If no provider config, use platform-based defaults
+        guard let config = provider?.meta?.codexChatReasoning else {
+            // Apply platform-specific response transformation
+            applyPlatformResponseDefaults(&response, platform: platform)
             return
         }
 
@@ -53,6 +61,81 @@ public struct ReasoningRectifier {
             default:
                 break
             }
+        }
+    }
+
+    /// Rectify request using a manual config instead of platform auto-detection.
+    public func rectifyRequestWithConfig(_ request: inout [String: Any], config: ReasoningConfig) {
+        // Apply thinking param
+        if config.supportsThinking == true, let param = config.thinkingParam {
+            // Remove common alternate params
+            if param != "thinking" { request.removeValue(forKey: "thinking") }
+            if param != "enable_thinking" { request.removeValue(forKey: "enable_thinking") }
+            request[param] = true
+        }
+
+        // Apply effort
+        if config.supportsEffort == true, let effort = request["effort"] as? String {
+            request.removeValue(forKey: "effort")
+            if let mode = config.effortValueMode {
+                switch mode {
+                case "deepseek":
+                    if let param = config.effortParam ?? config.thinkingParam {
+                        request[param] = mapEffortValue(effort, mode: "deepseek")
+                    } else {
+                        request["reasoning_effort"] = effort
+                    }
+                case "openrouter":
+                    request["reasoning"] = ["effort": effort]
+                default:
+                    request["reasoning_effort"] = effort
+                }
+            }
+        }
+    }
+
+    /// Rectify response using a manual config.
+    public func rectifyResponseWithConfig(_ response: inout [String: Any], config: ReasoningConfig) {
+        if let outputFormat = config.outputFormat {
+            switch outputFormat {
+            case "reasoning_content":
+                transformReasoningContent(&response)
+            case "reasoning_details":
+                transformReasoningDetails(&response)
+            default:
+                break
+            }
+        }
+    }
+
+    // MARK: - Platform-specific defaults (without config)
+
+    private func applyPlatformDefaults(_ request: inout [String: Any], platform: ReasoningPlatform) {
+        switch platform {
+        case .deepseek:
+            // DeepSeek default: enable thinking for reasoning models
+            if request["thinking"] == nil {
+                request["thinking"] = true
+            }
+        case .siliconflow, .qwen:
+            // SiliconFlow/Qwen default: enable_thinking
+            if request["thinking"] != nil || request["reasoning"] != nil {
+                request.removeValue(forKey: "thinking")
+                request.removeValue(forKey: "reasoning")
+                request["enable_thinking"] = true
+            }
+        default:
+            break
+        }
+    }
+
+    private func applyPlatformResponseDefaults(_ response: inout [String: Any], platform: ReasoningPlatform) {
+        switch platform {
+        case .deepseek, .siliconflow, .qwen:
+            // These platforms use reasoning_content
+            transformReasoningContent(&response)
+        default:
+            break
         }
     }
 
@@ -156,7 +239,7 @@ public struct ReasoningRectifier {
         }
     }
 
-    private func transformReasoningContent(_ response: inout [String: Any]) {
+    func transformReasoningContent(_ response: inout [String: Any]) {
         // Transform reasoning_content to standard format
         if let choices = response["choices"] as? [[String: Any]] {
             var newChoices: [[String: Any]] = []
@@ -178,7 +261,7 @@ public struct ReasoningRectifier {
         }
     }
 
-    private func transformReasoningDetails(_ response: inout [String: Any]) {
+    func transformReasoningDetails(_ response: inout [String: Any]) {
         // Transform reasoning_details to standard format
         if let choices = response["choices"] as? [[String: Any]] {
             var newChoices: [[String: Any]] = []
@@ -203,7 +286,7 @@ public struct ReasoningRectifier {
 }
 
 /// Supported reasoning platforms.
-public enum ReasoningPlatform: String, Codable, CaseIterable {
+public enum ReasoningPlatform: String, Codable, CaseIterable, Sendable {
     case deepseek
     case openrouter
     case siliconflow

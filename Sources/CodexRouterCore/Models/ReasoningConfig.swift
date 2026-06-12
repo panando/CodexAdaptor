@@ -1,7 +1,7 @@
 import Foundation
 
 /// Configuration for reasoning/thinking support in Codex Chat providers.
-public struct ReasoningConfig: Codable, Equatable {
+public struct ReasoningConfig: Codable, Sendable, Equatable {
     public var supportsThinking: Bool?
     public var supportsEffort: Bool?
     public var thinkingParam: String?
