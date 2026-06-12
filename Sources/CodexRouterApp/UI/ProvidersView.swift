@@ -276,7 +276,6 @@ public struct ProviderFormView: View {
     @State private var id: String = ""
     @State private var name: String = ""
     @State private var baseURL: String = ""
-    @State private var wireAPI: String = "responses"
     @State private var upstreamWireAPI: String = "chat"
     @State private var apiKey: String = ""
     @State private var bearerToken: String = ""
@@ -400,20 +399,29 @@ public struct ProviderFormView: View {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(model.displayName ?? model.model)
-                                            .font(.body)
-                                        Text(model.model)
+                                            .fontWeight(.medium)
+                                        Text("ID: \(model.model)")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
+                                        if let ctx = model.contextWindow {
+                                            Text("Context: \(ctx / 1000)K tokens")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
                                     }
                                     Spacer()
                                     Button(action: {
-                                        modelCatalog.models.removeAll { $0.id == model.id }
+                                        withAnimation {
+                                            modelCatalog.models.removeAll { $0.id == model.id }
+                                        }
                                     }) {
-                                        Image(systemName: "xmark.circle.fill")
+                                        Image(systemName: "trash")
                                             .foregroundColor(.red)
                                     }
                                     .buttonStyle(.borderless)
                                 }
+                                .padding(.vertical, 4)
+                                Divider()
                             }
                         }
                     }
@@ -467,7 +475,6 @@ public struct ProviderFormView: View {
                 id = provider.id
                 name = provider.name
                 baseURL = provider.baseURL
-                wireAPI = provider.wireAPI
                 upstreamWireAPI = provider.upstreamWireAPI
                 apiKey = provider.apiKey ?? ""
                 bearerToken = provider.bearerToken ?? ""
