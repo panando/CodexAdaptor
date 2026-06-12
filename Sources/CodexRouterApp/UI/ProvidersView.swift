@@ -285,6 +285,12 @@ public struct ProviderFormView: View {
     @State private var newModelSlug: String = ""
     @State private var newModelDisplayName: String = ""
     @State private var newModelContextWindow: String = "128000"
+    @State private var showReasoningConfig = false
+    @State private var supportsThinking = false
+    @State private var supportsEffort = false
+    @State private var thinkingParam = "thinking"
+    @State private var effortValueMode = "standard"
+    @State private var reasoningOutputFormat = "reasoning_content"
 
     private var isEditing: Bool {
         provider != nil
@@ -342,6 +348,38 @@ public struct ProviderFormView: View {
                 }
 
                 Section {
+                    Toggle("Show Advanced Reasoning Config", isOn: $showReasoningConfig)
+
+                    if showReasoningConfig {
+                        Toggle("Supports Thinking (Reasoning)", isOn: $supportsThinking)
+
+                        if supportsThinking {
+                            Picker("Thinking Parameter", selection: $thinkingParam) {
+                                Text("thinking").tag("thinking")
+                                Text("enable_thinking").tag("enable_thinking")
+                                Text("reasoning").tag("reasoning")
+                            }
+
+                            Picker("Effort Value Mode", selection: $effortValueMode) {
+                                Text("Standard (reasoning_effort)").tag("standard")
+                                Text("DeepSeek (thinking + reasoning_effort)").tag("deepseek")
+                                Text("OpenRouter (reasoning.effort)").tag("openrouter")
+                            }
+
+                            Picker("Reasoning Output Format", selection: $reasoningOutputFormat) {
+                                Text("reasoning_content").tag("reasoning_content")
+                                Text("reasoning_details").tag("reasoning_details")
+                                Text("think_tags").tag("think_tags")
+                            }
+
+                            Toggle("Supports Effort Levels", isOn: $supportsEffort)
+                        }
+                    }
+                } header: {
+                    Text("Reasoning Configuration")
+                }
+
+                Section {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Model Catalog")
@@ -394,6 +432,16 @@ public struct ProviderFormView: View {
             HStack {
                 Spacer()
                 Button("Save") {
+                    let reasoningConfig = showReasoningConfig && supportsThinking
+                        ? ReasoningConfig(
+                            supportsThinking: true,
+                            supportsEffort: supportsEffort ? true : nil,
+                            thinkingParam: thinkingParam,
+                            effortParam: nil,
+                            effortValueMode: effortValueMode,
+                            outputFormat: reasoningOutputFormat
+                        )
+                        : nil
                     let newProvider = CodexModelProvider(
                         id: id.lowercased().replacingOccurrences(of: " ", with: "-"),
                         name: name.isEmpty ? id : name,
@@ -402,7 +450,8 @@ public struct ProviderFormView: View {
                         upstreamWireAPI: upstreamWireAPI,
                         apiKey: apiKey.isEmpty ? nil : apiKey,
                         bearerToken: bearerToken.isEmpty ? nil : bearerToken,
-                        modelCatalog: modelCatalog.models.isEmpty ? nil : modelCatalog
+                        modelCatalog: modelCatalog.models.isEmpty ? nil : modelCatalog,
+                        reasoningConfig: reasoningConfig
                     )
                     onSave(newProvider)
                     dismiss()
@@ -423,6 +472,14 @@ public struct ProviderFormView: View {
                 apiKey = provider.apiKey ?? ""
                 bearerToken = provider.bearerToken ?? ""
                 modelCatalog = provider.modelCatalog ?? ModelCatalog(models: [])
+                if let rc = provider.reasoningConfig {
+                    supportsThinking = rc.supportsThinking ?? false
+                    supportsEffort = rc.supportsEffort ?? false
+                    thinkingParam = rc.thinkingParam ?? "thinking"
+                    effortValueMode = rc.effortValueMode ?? "standard"
+                    reasoningOutputFormat = rc.outputFormat ?? "reasoning_content"
+                    showReasoningConfig = true
+                }
             }
         }
         .alert("Add Model", isPresented: $showAddModel) {
