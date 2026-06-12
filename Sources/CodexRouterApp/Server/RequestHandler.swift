@@ -293,11 +293,11 @@ public actor RequestHandler {
                 if let content = item["content"] as? String {
                     message["content"] = content
                 } else if let contentArray = item["content"] as? [[String: Any]] {
-                    // Convert input_text to text
+                    // Convert Responses API content block types to Chat Completions types
                     let convertedContent = contentArray.compactMap { block -> [String: Any]? in
                         guard let type = block["type"] as? String else { return nil }
                         var newBlock = block
-                        if type == "input_text" {
+                        if type == "input_text" || type == "output_text" {
                             newBlock["type"] = "text"
                         }
                         return newBlock
@@ -345,6 +345,10 @@ public actor RequestHandler {
         result.removeValue(forKey: "include")
         result.removeValue(forKey: "disable_response_storage")
         result.removeValue(forKey: "model_reasoning_effort")
+        result.removeValue(forKey: "text")
+        result.removeValue(forKey: "reasoning")
+        result.removeValue(forKey: "verbosity")
+        result.removeValue(forKey: "instructions")
 
         // Rename max_output_tokens to max_tokens
         if let maxOutputTokens = json["max_output_tokens"] {
