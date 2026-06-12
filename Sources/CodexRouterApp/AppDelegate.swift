@@ -47,11 +47,38 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         guard let statusItem = statusItem else { return }
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "network", accessibilityDescription: "CodexAdaptor")
+            button.image = menuBarIcon()
             button.toolTip = "CodexAdaptor"
         }
 
         statusItem.menu = buildMenu()
+    }
+
+    private func menuBarIcon() -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+
+        // 1. Try from app bundle Resources (production .app)
+        if let bundleIcon = NSImage(named: "CodexAdaptor") {
+            bundleIcon.size = size
+            return bundleIcon
+        }
+
+        // 2. Try loading from the project directory (dev)
+        let execURL = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        if let execURL = execURL {
+            let iconPath = execURL.appendingPathComponent("CodexAdaptor.icns").path
+            if let devIcon = NSImage(contentsOfFile: iconPath) {
+                devIcon.size = size
+                return devIcon
+            }
+        }
+
+        // 3. Fallback: system symbol
+        return NSImage(systemSymbolName: "network", accessibilityDescription: "CodexAdaptor")
+            ?? NSImage(size: size, flipped: false) { _ in true }
     }
 
     private func buildMenu() -> NSMenu {
