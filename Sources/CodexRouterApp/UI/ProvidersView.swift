@@ -289,7 +289,7 @@ public struct ProviderFormView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(L10n.modelAlias)
                         .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                    TextField(L10n.displayNamePrompt, text: $newModelDisplayName)
+                    TextField("", text: $newModelDisplayName)
                         .textFieldStyle(.roundedBorder)
                     Text(L10n.modelAliasDesc)
                         .font(.caption2).foregroundColor(.secondary)
@@ -300,7 +300,7 @@ public struct ProviderFormView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(L10n.modelSlug)
                         .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                    TextField(L10n.modelSlugPrompt, text: $newModelSlug)
+                    TextField("", text: $newModelSlug)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                     Text(L10n.modelSlugDesc)
@@ -312,7 +312,7 @@ public struct ProviderFormView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(L10n.contextWindow)
                         .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                    TextField(L10n.contextWindowPrompt, text: $newModelContextWindow)
+                    TextField("", text: $newModelContextWindow)
                         .textFieldStyle(.roundedBorder)
                     Text(L10n.contextWindowExample)
                         .font(.caption2).foregroundColor(.secondary)
