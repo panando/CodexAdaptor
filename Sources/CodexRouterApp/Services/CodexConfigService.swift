@@ -7,8 +7,8 @@ import CodexRouterCore
 public class CodexConfigService {
     public static let shared = CodexConfigService()
 
+    private let home: String
     private let configPath: String
-    private let modelCatalogPath: String
     private let modelsCachePath: String
     private let backupSuffix = ".bak.codexrouter"
 
@@ -17,9 +17,13 @@ public class CodexConfigService {
 
     private init() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        self.home = home
         self.configPath = "\(home)/.codex/config.toml"
-        self.modelCatalogPath = "\(home)/.codex/cc-switch-model-catalog.json"
         self.modelsCachePath = "\(home)/.codex/models_cache.json"
+    }
+
+    private func modelCatalogPath(for providerId: String) -> String {
+        "\(home)/.codex/\(providerId)-model-catalog.json"
     }
 
     /// Check if Codex config exists.
@@ -114,8 +118,8 @@ public class CodexConfigService {
                 let apiKey = extractValue(from: sectionContent, key: "api_key") ?? extractValue(from: sectionContent, key: "apiKey")
                 let bearerToken = extractValue(from: sectionContent, key: "experimental_bearer_token")
 
-                // Read model catalog if exists (from separate JSON file)
-                let modelCatalog = try? readModelCatalog()
+                // Read model catalog if exists (from provider-specific JSON file)
+                let modelCatalog = try? readModelCatalog(for: providerId)
 
                 let provider = CodexModelProvider(
                     id: providerId,
@@ -162,12 +166,24 @@ public class CodexConfigService {
     }
 
     /// Read model catalog from JSON file (simplified format for UI).
-    public func readModelCatalog() throws -> ModelCatalog? {
-        guard FileManager.default.fileExists(atPath: modelCatalogPath) else {
+    public func readModelCatalog(for providerId: String? = nil) throws -> ModelCatalog? {
+        let path: String
+        if let providerId = providerId {
+            path = modelCatalogPath(for: providerId)
+        } else {
+            // Read model_catalog_json from config to find the file
+            guard let config = try? String(contentsOfFile: configPath, encoding: .utf8),
+                  let catalogFile = extractValue(from: config, key: "model_catalog_json") else {
+                return nil
+            }
+            path = "\(home)/.codex/\(catalogFile)"
+        }
+
+        guard FileManager.default.fileExists(atPath: path) else {
             return nil
         }
 
-        let data = try Data(contentsOf: URL(fileURLWithPath: modelCatalogPath))
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = json["models"] as? [[String: Any]] else {
             return nil
@@ -242,9 +258,11 @@ public class CodexConfigService {
         // Generate model catalog JSON from user configuration (following cc-switch's approach)
         // This is the key part: generate catalog from provider.modelCatalog.models
         if let catalog = provider.modelCatalog, !catalog.models.isEmpty {
-            try generateModelCatalogJSON(from: catalog)
+            try generateModelCatalogJSON(from: catalog, providerId: provider.id)
             // Add model_catalog_json field to config
-            content = try ensureModelCatalogField(content)
+            content = try ensureModelCatalogField(content, providerId: provider.id)
+        } else {
+            content = removeModelCatalogField(content)
         }
 
         try content.write(toFile: configPath, atomically: true, encoding: .utf8)
@@ -320,7 +338,7 @@ public class CodexConfigService {
 
     /// Generate model catalog JSON from user's modelCatalog configuration.
     /// This follows cc-switch's codex_model_catalog_from_settings logic.
-    private func generateModelCatalogJSON(from catalog: ModelCatalog) throws {
+    private func generateModelCatalogJSON(from catalog: ModelCatalog, providerId: String) throws {
         // Load template following cc-switch's priority:
         // 1. models_cache.json (created by Codex when it connects to OpenAI)
         // 2. codex CLI (debug models --bundled)
@@ -349,7 +367,7 @@ public class CodexConfigService {
         let catalogJSON: [String: Any] = ["models": entries]
 
         let jsonData = try JSONSerialization.data(withJSONObject: catalogJSON, options: [.prettyPrinted, .sortedKeys])
-        try jsonData.write(to: URL(fileURLWithPath: modelCatalogPath))
+        try jsonData.write(to: URL(fileURLWithPath: modelCatalogPath(for: providerId)))
     }
 
     /// Generate a single model catalog entry from the template.
@@ -643,9 +661,9 @@ public class CodexConfigService {
     }
 
     /// Ensure model_catalog_json field exists in config.
-    private func ensureModelCatalogField(_ content: String) throws -> String {
+    private func ensureModelCatalogField(_ content: String, providerId: String) throws -> String {
         let fieldName = "model_catalog_json"
-        let fieldValue = "cc-switch-model-catalog.json"
+        let fieldValue = "\(providerId)-model-catalog.json"
 
         // Check if field already exists with correct value
         if content.contains("\(fieldName) = \"\(fieldValue)\"") {
@@ -674,6 +692,16 @@ public class CodexConfigService {
 
         lines.insert("\(fieldName) = \"\(fieldValue)\"", at: insertIndex)
         return lines.joined(separator: "\n")
+    }
+
+    /// Remove model_catalog_json field from config content.
+    private func removeModelCatalogField(_ content: String) -> String {
+        let pattern = #"^model_catalog_json\s*=\s*"[^"]*"\n"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else {
+            return content
+        }
+        let range = NSRange(content.startIndex..., in: content)
+        return regex.stringByReplacingMatches(in: content, options: [], range: range, withTemplate: "")
     }
 
     private func generateDefaultConfig() -> String {
