@@ -266,7 +266,7 @@ public struct ProviderFormView: View {
     @State private var showAddModel: Bool = false
     @State private var newModelSlug: String = ""
     @State private var newModelDisplayName: String = ""
-    @State private var newModelContextWindow: String = "128000"
+    @State private var newModelContextWindow: String = ""
     @State private var showReasoningConfig = false
     @State private var supportsThinking = false
     @State private var supportsEffort = false
@@ -282,19 +282,19 @@ public struct ProviderFormView: View {
     private var modelEditorForm: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                TextField("", text: $newModelDisplayName)
+                TextField("", text: $newModelDisplayName, prompt: Text(L10n.displayNamePrompt))
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity)
 
-                TextField("", text: $newModelSlug)
+                TextField("", text: $newModelSlug, prompt: Text(L10n.modelSlugPrompt))
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.callout, design: .monospaced))
                     .multilineTextAlignment(.leading)
                     .autocorrectionDisabled()
                     .frame(maxWidth: .infinity)
 
-                TextField("", text: $newModelContextWindow)
+                TextField("", text: $newModelContextWindow, prompt: Text(L10n.contextWindowPrompt))
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.leading)
                     .frame(width: 100)
@@ -335,7 +335,7 @@ public struct ProviderFormView: View {
     private func resetModelForm() {
         newModelSlug = ""
         newModelDisplayName = ""
-        newModelContextWindow = "128000"
+        newModelContextWindow = ""
     }
 
     public init(appState: AppState, provider: CodexModelProvider?, onSave: @escaping (CodexModelProvider) -> Void, onDismiss: @escaping () -> Void) {
