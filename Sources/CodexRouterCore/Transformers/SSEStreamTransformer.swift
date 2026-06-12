@@ -85,6 +85,7 @@ public struct ChatToResponsesState: Sendable {
     public var toolCalls: [Int: ToolCallState] = [:]
     public var latestUsage: [String: Any]?
     public var finishReason: String?
+    public var responseCompleted: Bool = false
 
     public struct ToolCallState: Sendable {
         public var itemId: String = ""
@@ -105,6 +106,17 @@ public actor ChatToResponsesStreamTransformer {
 
     public init() {}
 
+    /// Signal the end of the stream. Returns final events (response.completed + [DONE])
+    /// if they haven't been sent already.
+    public func finish() -> Data? {
+        guard !state.responseCompleted else { return nil }
+        state.responseCompleted = true
+        var events: [String] = []
+        events.append(createResponseCompletedEvent(state: state))
+        events.append("data: [DONE]\n\n")
+        return events.joined().data(using: .utf8)
+    }
+
     /// Transform a chunk of Chat Completions SSE data to Responses API format.
     public func transform(_ data: Data) -> Data? {
         let events = parser.parse(data)
@@ -119,6 +131,7 @@ public actor ChatToResponsesStreamTransformer {
                     let completedEvent = createResponseCompletedEvent(state: state)
                     outputEvents.append(completedEvent)
                     outputEvents.append("data: [DONE]\n\n")
+                    state.responseCompleted = true
                 }
                 continue
             }
@@ -184,9 +197,33 @@ public actor ChatToResponsesStreamTransformer {
             }
         }
 
-        // Handle finish reason
+        // Handle finish reason — close all open output items before stream ends
         if let finishReason = choice["finish_reason"] as? String {
             state.finishReason = finishReason
+            // Finalize text item if open
+            if state.textItemAdded, let itemId = state.textItemId {
+                let outputIndex = state.nextOutputIndex - 1
+                events.append(createContentPartDoneEvent(itemId: itemId, outputIndex: outputIndex))
+                events.append(createOutputItemDoneEvent(itemId: itemId, outputIndex: outputIndex, type: "message"))
+                state.textItemAdded = false
+                state.textItemId = nil
+            }
+            // Finalize reasoning item if still open (no text content followed)
+            if state.reasoningItemAdded, let itemId = state.reasoningItemId {
+                let outputIndex = state.nextOutputIndex - 1
+                events.append(createOutputItemDoneEvent(itemId: itemId, outputIndex: outputIndex, type: "reasoning"))
+                state.reasoningItemAdded = false
+                state.reasoningItemId = nil
+            }
+            // Finalize any open tool call items
+            for (index, var toolState) in state.toolCalls {
+                if toolState.added {
+                    let outputIndex = state.nextOutputIndex - 1
+                    events.append(createOutputItemDoneEvent(itemId: toolState.itemId, outputIndex: outputIndex, type: "function_call"))
+                    toolState.added = false
+                    state.toolCalls[index] = toolState
+                }
+            }
         }
 
         return events

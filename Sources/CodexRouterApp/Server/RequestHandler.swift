@@ -189,24 +189,34 @@ public actor RequestHandler {
 
             var isFirstChunk = true
 
-            // Create an async sequence that transforms and yields events
-            let eventSequence = streamingResponse.events.map { (data: Data) -> ByteBuffer in
-                if isFirstChunk {
-                    isFirstChunk = false
-                    if let raw = String(data: data, encoding: .utf8) {
-                        NSLog("[CodexRouter] First raw upstream chunk: \(raw.prefix(500))")
-                    }
-                }
-                if let transformedData = await transformer.transform(data) {
-                    if let transformed = String(data: transformedData, encoding: .utf8) {
-                        NSLog("[CodexRouter] Transformed output: \(transformed.prefix(500))")
-                    }
-                    return ByteBuffer(data: transformedData)
-                } else {
-                    if let raw = String(data: data, encoding: .utf8) {
-                        NSLog("[CodexRouter] Transform returned nil, raw upstream: \(raw.prefix(500))")
-                    }
-                    return ByteBuffer(data: data)
+            // Create an async sequence that transforms and yields events,
+            // then appends final response.completed + [DONE] after the upstream stream ends.
+            let eventSequence = AsyncStream<ByteBuffer> { continuation in
+                Task {
+                    for await data in streamingResponse.events {
+                            if isFirstChunk {
+                                isFirstChunk = false
+                                if let raw = String(data: data, encoding: .utf8) {
+                                    NSLog("[CodexRouter] First raw upstream chunk: \(raw.prefix(500))")
+                                }
+                            }
+                            if let transformedData = await transformer.transform(data) {
+                                if let transformed = String(data: transformedData, encoding: .utf8) {
+                                    NSLog("[CodexRouter] Transformed output: \(transformed.prefix(500))")
+                                }
+                                continuation.yield(ByteBuffer(data: transformedData))
+                            } else if let raw = String(data: data, encoding: .utf8) {
+                                NSLog("[CodexRouter] Transform returned nil, raw upstream: \(raw.prefix(500))")
+                                continuation.yield(ByteBuffer(data: data))
+                            }
+                        }
+                        // Stream ended — send completion events if not already sent
+                        if let finalData = await transformer.finish(),
+                           let final = String(data: finalData, encoding: .utf8) {
+                            NSLog("[CodexRouter] Final flush: \(final.prefix(200))")
+                            continuation.yield(ByteBuffer(data: finalData))
+                        }
+                    continuation.finish()
                 }
             }
 
