@@ -281,32 +281,43 @@ public struct ProviderFormView: View {
 
     @ViewBuilder
     private var modelEditorForm: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(spacing: 8) {
             Divider()
 
-            Text(editingModelIndex != nil ? L10n.editModel : L10n.addModel)
-                .font(.subheadline).fontWeight(.semibold)
+            HStack(spacing: 12) {
+                // Column: Display Name (alias)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.modelAlias)
+                        .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                    TextField(L10n.displayNamePrompt, text: $newModelDisplayName)
+                        .textFieldStyle(.roundedBorder)
+                    Text(L10n.modelAliasDesc)
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(L10n.modelSlug)
-                    .font(.caption).foregroundColor(.secondary)
-                TextField(L10n.modelSlugPrompt, text: $newModelSlug)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-            }
+                // Column: Model Slug (actual model name)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.modelSlug)
+                        .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                    TextField(L10n.modelSlugPrompt, text: $newModelSlug)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                    Text(L10n.modelSlugDesc)
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(L10n.displayName)
-                    .font(.caption).foregroundColor(.secondary)
-                TextField(L10n.displayNamePrompt, text: $newModelDisplayName)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(L10n.contextWindow)
-                    .font(.caption).foregroundColor(.secondary)
-                TextField(L10n.contextWindowPrompt, text: $newModelContextWindow)
-                    .textFieldStyle(.roundedBorder)
+                // Column: Context Window
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.contextWindow)
+                        .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                    TextField(L10n.contextWindowPrompt, text: $newModelContextWindow)
+                        .textFieldStyle(.roundedBorder)
+                    Text(L10n.contextWindowExample)
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
             }
 
             HStack(spacing: 10) {
@@ -334,6 +345,7 @@ public struct ProviderFormView: View {
                 .controlSize(.small)
                 .disabled(newModelSlug.isEmpty)
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(10)
         .background(
@@ -517,24 +529,51 @@ public struct ProviderFormView: View {
                     }
 
                     Section {
+                        // Column headers
+                        if !modelCatalog.models.isEmpty {
+                            HStack(spacing: 12) {
+                                Text(L10n.modelAlias)
+                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text(L10n.modelSlug)
+                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text(L10n.contextWindow)
+                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                                    .frame(width: 60, alignment: .trailing)
+                                Spacer().frame(width: 52)
+                            }
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 2)
+                        }
+
                         // Model list
                         ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, model in
-                            HStack(spacing: 10) {
-                                Image(systemName: "cube")
-                                    .foregroundColor(.blue)
-                                    .font(.callout)
+                            HStack(spacing: 12) {
+                                // Display name (alias)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(model.displayName ?? model.model)
                                         .font(.body).fontWeight(.medium)
-                                    Text(model.model)
-                                        .font(.caption).foregroundColor(.secondary)
-                                    if let ctx = model.contextWindow {
-                                        Text("\(ctx / 1000)K context")
+                                    if model.displayName != nil {
+                                        Text(model.model)
                                             .font(.caption2).foregroundColor(.secondary)
                                     }
                                 }
-                                Spacer()
-                                HStack(spacing: 8) {
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                // Actual model name
+                                Text(model.model)
+                                    .font(.system(.callout, design: .monospaced))
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                // Context window
+                                Text(model.contextWindow.map { "\($0 / 1000)K" } ?? "—")
+                                    .font(.callout).foregroundColor(.secondary)
+                                    .frame(width: 60, alignment: .trailing)
+
+                                // Actions
+                                HStack(spacing: 6) {
                                     Button {
                                         newModelSlug = model.model
                                         newModelDisplayName = model.displayName ?? ""
@@ -542,33 +581,23 @@ public struct ProviderFormView: View {
                                         editingModelIndex = index
                                         showAddModel = true
                                     } label: {
-                                        Label(L10n.edit, systemImage: "pencil")
+                                        Image(systemName: "pencil")
                                     }
-                                    .buttonStyle(.bordered)
+                                    .buttonStyle(.borderless)
                                     .controlSize(.small)
                                     .help(L10n.editModel)
 
                                     Button {
                                         modelIndexToDelete = index
                                     } label: {
-                                        Label(L10n.deleteBtn, systemImage: "trash")
+                                        Image(systemName: "trash")
                                     }
-                                    .buttonStyle(.bordered)
+                                    .buttonStyle(.borderless)
                                     .controlSize(.small)
                                     .help(L10n.removeModel)
                                 }
                             }
-                            .padding(.vertical, 3)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if !showAddModel || editingModelIndex != index {
-                                    newModelSlug = model.model
-                                    newModelDisplayName = model.displayName ?? ""
-                                    newModelContextWindow = model.contextWindow.map { String($0) } ?? "128000"
-                                    editingModelIndex = index
-                                    showAddModel = true
-                                }
-                            }
+                            .padding(.vertical, 4)
 
                             // Inline form appears right below the edited row
                             if showAddModel && editingModelIndex == index {

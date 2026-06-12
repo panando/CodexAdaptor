@@ -103,15 +103,18 @@ public enum L10n {
     static var thinkingMiniMax: String { lang("reasoning_split — MiniMax", "reasoning_split — MiniMax") }
 
     // Model editor
-    static var modelSlug: String { lang("Model Slug", "模型标识") }
+    static var modelSlug: String { lang("Model Name", "实际模型名称") }
     static var modelSlugPrompt: String { lang("deepseek-chat", "deepseek-chat") }
-    static var modelSlugDesc: String { lang("API model identifier. Must match the upstream provider's model name exactly.", "API 模型标识符，必须与上游供应商的模型名完全一致。") }
+    static var modelSlugDesc: String { lang("Upstream API model ID", "上游 API 模型 ID") }
     static var displayName: String { lang("Display Name", "显示名称") }
     static var displayNamePrompt: String { lang("DeepSeek Chat", "DeepSeek Chat") }
     static var displayNameDesc: String { lang("Name shown in Codex's model picker. Optional — uses the slug if empty.", "Codex 模型选择器中显示的名称。可选 — 留空则使用模型标识。") }
     static var contextWindow: String { lang("Context Window", "上下文窗口") }
     static var contextWindowPrompt: String { lang("128000", "128000") }
     static var contextWindowDesc: String { lang("Max context tokens. Common values: 4K, 8K, 32K, 128K, 1M.", "最大上下文 token 数。常见值：4K、8K、32K、128K、1M。") }
+    static var modelAlias: String { lang("Model Alias", "模型别名") }
+    static var modelAliasDesc: String { lang("Codex display name", "Codex 显示名称") }
+    static var contextWindowExample: String { lang("e.g. 128,000", "如，128,000") }
     static var add: String { lang("Add", "添加") }
     static func removeModelConfirm(_ name: String) -> String { lang("Remove model \"\(name)\"?", "确定移除模型「\(name)」？") }
     static var removeModelDesc: String { lang("The model will no longer appear in Codex's model selector.", "该模型将不再出现在 Codex 的模型选择器中。") }
