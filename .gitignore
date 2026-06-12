@@ -1,6 +1,7 @@
 cc-switch
 EchoBird
 CodexPlusPlus
+CLAUDE.md
 
 # Build
 .build/
@@ -22,6 +23,9 @@ Package.resolved
 .DS_Store
 *.swp
 *~.nib
+*.app
+*.dmg
+*.DMG
 
 # IDEs
 *.idea/
