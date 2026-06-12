@@ -357,6 +357,7 @@ public actor RequestHandler {
         result.removeValue(forKey: "model_reasoning_effort")
         result.removeValue(forKey: "text")
         result.removeValue(forKey: "reasoning")
+        result.removeValue(forKey: "thinking")
         result.removeValue(forKey: "verbosity")
         result.removeValue(forKey: "instructions")
         result.removeValue(forKey: "prompt_cache_key")
