@@ -194,12 +194,23 @@ public actor ChatToResponsesStreamTransformer {
         if let error = json["error"] as? [String: Any] {
             let errType = error["type"] as? String ?? "server_error"
             let message = error["message"] as? String ?? "Unknown error"
+            // Ensure response lifecycle events are sent before error
+            if !state.responseStarted {
+                state.responseStarted = true
+                events.append(createResponseCreatedEvent())
+                events.append(createResponseInProgressEvent())
+            }
             events.append(createResponseFailedEvent(message: message, code: errType))
             state.hasError = true
             return true
         }
         // Error field that's a string
         if let errMsg = json["error"] as? String {
+            if !state.responseStarted {
+                state.responseStarted = true
+                events.append(createResponseCreatedEvent())
+                events.append(createResponseInProgressEvent())
+            }
             events.append(createResponseFailedEvent(message: errMsg, code: "server_error"))
             state.hasError = true
             return true
