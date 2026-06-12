@@ -302,6 +302,20 @@ public class CodexConfigService {
 
         var content = try String(contentsOfFile: configPath, encoding: .utf8)
 
+        // If deleting the current provider, clear model_provider first
+        if let currentId = extractValue(from: content, key: "model_provider"), currentId == id {
+            // Find another provider to switch to
+            let otherProviders = try getModelProviders().filter { $0.id != id }
+            if let first = otherProviders.first {
+                content = try updateValue(in: content, key: "model_provider", newValue: first.id)
+                if let firstModel = first.modelCatalog?.models.first?.model {
+                    content = try updateValue(in: content, key: "model", newValue: firstModel)
+                }
+            } else {
+                content = try updateValue(in: content, key: "model_provider", newValue: "")
+            }
+        }
+
         // Remove the provider section
         let pattern = #"\[model_providers\.\#(id)\][^\[]*"#
         if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) {
@@ -313,7 +327,7 @@ public class CodexConfigService {
     }
 
     /// Configure Codex to use the proxy.
-    public func setProxyURL(_ proxyURL: String = "http://127.0.0.1:15721") throws {
+    public func setProxyURL(_ proxyURL: String = "http://127.0.0.1:15721/v1") throws {
         guard FileManager.default.fileExists(atPath: configPath) else {
             throw CodexConfigError.configNotFound
         }

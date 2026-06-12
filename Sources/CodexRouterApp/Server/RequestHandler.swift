@@ -236,8 +236,10 @@ public actor RequestHandler {
         // Transform format if needed
         if provider.usesChatCompletions && endpoint == .responses {
             // Convert Chat Completions to Responses format
+            // Re-encode rectified json so reasoning changes are preserved
             do {
-                let chatResponse = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+                let rectifiedData = try JSONSerialization.data(withJSONObject: json)
+                let chatResponse = try JSONDecoder().decode(ChatCompletionResponse.self, from: rectifiedData)
                 let responsesAPI = chatToResponsesTransformer.transform(chatResponse: chatResponse)
                 return try JSONEncoder().encode(responsesAPI)
             } catch {
