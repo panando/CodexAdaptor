@@ -279,21 +279,61 @@ public struct ProviderFormView: View {
     private var isEditing: Bool { provider != nil }
 
     @ViewBuilder
+    private func sectionView<Content: View, Header: View>(
+        header: Header,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        sectionView(header: header, footer: { EmptyView() }, content: content)
+    }
+
+    @ViewBuilder
+    private func sectionView<Content: View, Header: View, Footer: View>(
+        header: Header,
+        @ViewBuilder footer: () -> Footer,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .font(.headline)
+                .padding(.bottom, 10)
+
+            VStack(alignment: .leading, spacing: 10) {
+                content()
+            }
+
+            footer()
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.top, 8)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
     private var modelEditorForm: some View {
         HStack(spacing: 12) {
-            TextField("", text: $newModelDisplayName)
+            TextField(L10n.modelAliasDesc, text: $newModelDisplayName)
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity)
 
-            TextField("", text: $newModelSlug)
+            TextField(L10n.modelSlugPrompt, text: $newModelSlug)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.callout, design: .monospaced))
                 .multilineTextAlignment(.leading)
                 .autocorrectionDisabled()
                 .frame(maxWidth: .infinity)
 
-            TextField("", text: $newModelContextWindow)
+            TextField(L10n.contextWindowExample, text: $newModelContextWindow)
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.leading)
                 .frame(width: 100)
@@ -364,19 +404,19 @@ public struct ProviderFormView: View {
 
             // Scrollable form content
             ScrollView {
-                Form {
-                    Section {
+                VStack(spacing: 20) {
+                    // Basic Information
+                    sectionView(header: Label(L10n.basicInfo, systemImage: "info.circle")) {
                         TextField(L10n.providerName, text: $name, prompt: Text(L10n.providerNamePrompt))
                             .textFieldStyle(.roundedBorder)
 
                         TextField(L10n.baseURL, text: $baseURL, prompt: Text("https://api.deepseek.com"))
                             .textFieldStyle(.roundedBorder)
                             .autocorrectionDisabled()
-                    } header: {
-                        Label(L10n.basicInfo, systemImage: "info.circle")
                     }
 
-                    Section {
+                    // API Configuration
+                    sectionView(header: Label(L10n.apiConfig, systemImage: "key")) {
                         Picker(L10n.wireProtocol, selection: $upstreamWireAPI) {
                             Text(L10n.chatCompletions).tag("chat")
                             Text(L10n.responsesAPI).tag("responses")
@@ -385,11 +425,17 @@ public struct ProviderFormView: View {
 
                         SecureField(L10n.apiKey, text: $bearerToken, prompt: Text(L10n.apiKeyPrompt))
                             .textFieldStyle(.roundedBorder)
-                    } header: {
-                        Label(L10n.apiConfig, systemImage: "key")
                     }
 
-                    Section {
+                    // Reasoning Configuration
+                    sectionView(
+                        header: Label(L10n.reasoningConfig, systemImage: "brain.head.profile"),
+                        footer: {
+                            if !showReasoningConfig {
+                                Text(L10n.reasoningAutoDetectFooter)
+                            }
+                        }
+                    ) {
                         HStack {
                             Toggle(L10n.overrideReasoning, isOn: $showReasoningConfig)
                             Spacer()
@@ -490,16 +536,13 @@ public struct ProviderFormView: View {
                                 )
                             }
                         }
-                    } header: {
-                        Label(L10n.reasoningConfig, systemImage: "brain.head.profile")
-                    } footer: {
-                        if !showReasoningConfig {
-                            Text(L10n.reasoningAutoDetectFooter)
-                        }
                     }
 
                     // Custom Models
-                    Section {
+                    sectionView(
+                        header: Label(L10n.customModels, systemImage: "cube.box"),
+                        footer: { Text(L10n.modelFooter) }
+                    ) {
                         // Labels + hints (once)
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 12) {
@@ -531,7 +574,7 @@ public struct ProviderFormView: View {
                         // Editable model rows
                         ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, _ in
                             HStack(spacing: 12) {
-                                TextField("", text: Binding(
+                                TextField(L10n.modelAliasDesc, text: Binding(
                                     get: { modelCatalog.models[index].displayName ?? "" },
                                     set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
                                 ))
@@ -539,7 +582,7 @@ public struct ProviderFormView: View {
                                 .multilineTextAlignment(.leading)
                                 .frame(maxWidth: .infinity)
 
-                                TextField("", text: Binding(
+                                TextField(L10n.modelSlugPrompt, text: Binding(
                                     get: { modelCatalog.models[index].model },
                                     set: { modelCatalog.models[index].model = $0 }
                                 ))
@@ -548,7 +591,7 @@ public struct ProviderFormView: View {
                                 .multilineTextAlignment(.leading)
                                 .frame(maxWidth: .infinity)
 
-                                TextField("", text: Binding(
+                                TextField(L10n.contextWindowExample, text: Binding(
                                     get: { modelCatalog.models[index].contextWindow.map { String($0) } ?? "" },
                                     set: { modelCatalog.models[index].contextWindow = UInt64($0) }
                                 ))
@@ -582,15 +625,10 @@ public struct ProviderFormView: View {
                             .buttonStyle(.borderless)
                             .controlSize(.small)
                         }
-                    } header: {
-                        Label(L10n.customModels, systemImage: "cube.box")
-                    } footer: {
-                        Text(L10n.modelFooter)
                     }
-
                 }
-                .formStyle(.grouped)
-                .frame(minWidth: 600)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
             }
 
             Divider()
