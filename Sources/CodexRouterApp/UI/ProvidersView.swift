@@ -301,7 +301,7 @@ public struct ProviderFormView: View {
 
                 Spacer().frame(width: 24)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 16)
             .padding(.vertical, 8)
 
             HStack(spacing: 10) {
@@ -326,7 +326,7 @@ public struct ProviderFormView: View {
                 .disabled(newModelSlug.isEmpty)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 16)
             .padding(.bottom, 8)
         }
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
@@ -505,15 +505,16 @@ public struct ProviderFormView: View {
                 .frame(minWidth: 600)
 
                 // Custom Models — outside Form to avoid .formStyle(.grouped) alignment issues
+                // Styled to match Form's grouped sections
                 VStack(alignment: .leading, spacing: 0) {
-                    // Section header
+                    // Section header — matches Form's Section header style
                     Label(L10n.customModels, systemImage: "cube.box")
-                        .font(.footnote).fontWeight(.medium)
+                        .font(.subheadline).fontWeight(.medium)
                         .foregroundColor(.secondary)
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, 20)
                         .padding(.bottom, 6)
 
-                    // Content card
+                    // Content — same background and corner radius as Form sections
                     VStack(spacing: 0) {
                         // Column headers with descriptions
                         HStack(spacing: 12) {
@@ -540,11 +541,11 @@ public struct ProviderFormView: View {
                             .frame(width: 100, alignment: .leading)
                             Spacer().frame(width: 24)
                         }
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 16)
                         .padding(.top, 10)
                         .padding(.bottom, 4)
 
-                        Divider().padding(.horizontal, 12)
+                        Divider().padding(.horizontal, 16)
 
                         // Editable model rows
                         ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, _ in
@@ -584,20 +585,20 @@ public struct ProviderFormView: View {
                                 .help(L10n.removeModel)
                                 .frame(width: 24)
                             }
-                            .padding(.horizontal, 12)
+                            .padding(.horizontal, 16)
                             .padding(.vertical, 6)
 
                             if index < modelCatalog.models.count - 1 {
-                                Divider().padding(.horizontal, 12)
+                                Divider().padding(.horizontal, 16)
                             }
                         }
 
                         if showAddModel {
-                            Divider().padding(.horizontal, 12)
+                            Divider().padding(.horizontal, 16)
                             modelEditorForm
                         }
 
-                        Divider().padding(.horizontal, 12)
+                        Divider().padding(.horizontal, 16)
 
                         if !showAddModel {
                             Button {
@@ -608,23 +609,19 @@ public struct ProviderFormView: View {
                             }
                             .buttonStyle(.borderless)
                             .controlSize(.small)
-                            .padding(.horizontal, 12)
+                            .padding(.horizontal, 16)
                             .padding(.vertical, 8)
                         }
                     }
                     .background(Color(nsColor: .controlBackgroundColor))
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                    )
-                    .padding(.horizontal, 16)
+                    .cornerRadius(6)
+                    .padding(.horizontal, 20)
 
-                    // Footer
+                    // Footer — matches Form's Section footer style
                     Text(L10n.modelFooter)
                         .font(.caption)
                         .foregroundColor(.secondary)
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, 20)
                         .padding(.top, 6)
                 }
                 .padding(.vertical, 8)
