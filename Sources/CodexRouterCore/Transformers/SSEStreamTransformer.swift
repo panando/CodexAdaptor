@@ -108,6 +108,7 @@ public struct ChatToResponsesState: Sendable {
     public var latestUsage: [String: Any]?
     public var finishReason: String?
     public var responseCompleted = false
+    public var hasError = false
     /// Completed output items for the response.completed event
     public var completedItems: [OutputItemEntry] = []
 
@@ -136,11 +137,14 @@ public actor ChatToResponsesStreamTransformer {
     /// Signal end of stream. Returns final events if response.completed not yet sent.
     public func finish() -> Data? {
         guard !state.responseCompleted else { return nil }
-        // Finalize any open items before completing
         finalizeAllOpenItems()
         state.responseCompleted = true
         var events: [String] = []
-        events.append(createResponseCompletedEvent())
+        if state.hasError {
+            events.append(createResponseFailedEvent())
+        } else {
+            events.append(createResponseCompletedEvent())
+        }
         events.append("data: [DONE]\n\n")
         return events.joined().data(using: .utf8)
     }
@@ -153,7 +157,10 @@ public actor ChatToResponsesStreamTransformer {
             guard !event.data.isEmpty, event.data != "[DONE]" else {
                 if event.data == "[DONE]" {
                     finalizeAllOpenItems()
-                    outputEvents.append(createResponseCompletedEvent())
+                    let completed = state.hasError
+                        ? createResponseFailedEvent()
+                        : createResponseCompletedEvent()
+                    outputEvents.append(completed)
                     outputEvents.append("data: [DONE]\n\n")
                     state.responseCompleted = true
                 }
@@ -161,16 +168,43 @@ public actor ChatToResponsesStreamTransformer {
             }
 
             guard let jsonData = event.data.data(using: .utf8),
-                  let chunk = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
                 continue
             }
 
-            let responsesEvents = processChatChunk(chunk)
+            // Check for upstream error in SSE data
+            if detectAndHandleError(json, events: &outputEvents) {
+                state.responseCompleted = true
+                outputEvents.append("data: [DONE]\n\n")
+                continue
+            }
+
+            let responsesEvents = processChatChunk(json)
             outputEvents.append(contentsOf: responsesEvents)
         }
 
         guard !outputEvents.isEmpty else { return nil }
         return outputEvents.joined().data(using: .utf8)
+    }
+
+    /// Detect upstream error in SSE data and generate response.failed event.
+    /// Following cc-switch's error handling in streaming_codex_chat.rs.
+    private func detectAndHandleError(_ json: [String: Any], events: inout [String]) -> Bool {
+        // Direct error field
+        if let error = json["error"] as? [String: Any] {
+            let errType = error["type"] as? String ?? "server_error"
+            let message = error["message"] as? String ?? "Unknown error"
+            events.append(createResponseFailedEvent(message: message, code: errType))
+            state.hasError = true
+            return true
+        }
+        // Error field that's a string
+        if let errMsg = json["error"] as? String {
+            events.append(createResponseFailedEvent(message: errMsg, code: "server_error"))
+            state.hasError = true
+            return true
+        }
+        return false
     }
 
     // MARK: - Chunk Processing
@@ -494,6 +528,23 @@ public actor ChatToResponsesStreamTransformer {
                 "status": "in_progress",
                 "model": state.model,
                 "output": []
+            ]
+        ])
+    }
+
+    private func createResponseFailedEvent(message: String = "Unknown error", code: String = "server_error") -> String {
+        sseEvent("response.failed", [
+            "type": "response.failed",
+            "response": [
+                "id": state.responseId,
+                "object": "response",
+                "status": "failed",
+                "model": state.model,
+                "output": []
+            ],
+            "error": [
+                "type": code,
+                "message": message
             ]
         ])
     }
