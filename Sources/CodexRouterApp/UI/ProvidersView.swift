@@ -282,42 +282,23 @@ public struct ProviderFormView: View {
     private var modelEditorForm: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.modelAlias)
-                        .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                    TextField("", text: $newModelDisplayName)
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.leading)
-                    Text(L10n.modelAliasDesc)
-                        .font(.caption2).foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity)
+                TextField("", text: $newModelDisplayName)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.modelSlug)
-                        .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                    TextField("", text: $newModelSlug)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.callout, design: .monospaced))
-                        .multilineTextAlignment(.leading)
-                        .autocorrectionDisabled()
-                    Text(L10n.modelSlugDesc)
-                        .font(.caption2).foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity)
+                TextField("", text: $newModelSlug)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.callout, design: .monospaced))
+                    .multilineTextAlignment(.leading)
+                    .autocorrectionDisabled()
+                    .frame(maxWidth: .infinity)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.contextWindow)
-                        .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                    TextField("", text: $newModelContextWindow)
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.leading)
-                    Text(L10n.contextWindowExample)
-                        .font(.caption2).foregroundColor(.secondary)
-                }
-                .frame(width: 100)
+                TextField("", text: $newModelContextWindow)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.leading)
+                    .frame(width: 100)
 
-                // Spacer to match delete button column
                 Spacer().frame(width: 24)
             }
             .padding(.horizontal, 12)
@@ -534,17 +515,29 @@ public struct ProviderFormView: View {
 
                     // Content card
                     VStack(spacing: 0) {
-                        // Column headers
+                        // Column headers with descriptions
                         HStack(spacing: 12) {
-                            Text(L10n.modelAlias)
-                                .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text(L10n.modelSlug)
-                                .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text(L10n.contextWindow)
-                                .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
-                                .frame(width: 100, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(L10n.modelAlias)
+                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                                Text(L10n.modelAliasDesc)
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(L10n.modelSlug)
+                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                                Text(L10n.modelSlugDesc)
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(L10n.contextWindow)
+                                    .font(.caption).fontWeight(.medium).foregroundColor(.secondary)
+                                Text(L10n.contextWindowExample)
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
+                            .frame(width: 100, alignment: .leading)
                             Spacer().frame(width: 24)
                         }
                         .padding(.horizontal, 12)
@@ -556,41 +549,29 @@ public struct ProviderFormView: View {
                         // Editable model rows
                         ForEach(Array(modelCatalog.models.enumerated()), id: \.element.id) { index, _ in
                             HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    TextField("", text: Binding(
-                                        get: { modelCatalog.models[index].displayName ?? "" },
-                                        set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
-                                    .multilineTextAlignment(.leading)
-                                    Text(L10n.modelAliasDesc)
-                                        .font(.caption2).foregroundColor(.secondary)
-                                }
+                                TextField("", text: Binding(
+                                    get: { modelCatalog.models[index].displayName ?? "" },
+                                    set: { modelCatalog.models[index].displayName = $0.isEmpty ? nil : $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.leading)
                                 .frame(maxWidth: .infinity)
 
-                                VStack(alignment: .leading, spacing: 2) {
-                                    TextField("", text: Binding(
-                                        get: { modelCatalog.models[index].model },
-                                        set: { modelCatalog.models[index].model = $0 }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(.callout, design: .monospaced))
-                                    .multilineTextAlignment(.leading)
-                                    Text(L10n.modelSlugDesc)
-                                        .font(.caption2).foregroundColor(.secondary)
-                                }
+                                TextField("", text: Binding(
+                                    get: { modelCatalog.models[index].model },
+                                    set: { modelCatalog.models[index].model = $0 }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.callout, design: .monospaced))
+                                .multilineTextAlignment(.leading)
                                 .frame(maxWidth: .infinity)
 
-                                VStack(alignment: .leading, spacing: 2) {
-                                    TextField("", text: Binding(
-                                        get: { modelCatalog.models[index].contextWindow.map { String($0) } ?? "" },
-                                        set: { modelCatalog.models[index].contextWindow = UInt64($0) }
-                                    ))
-                                    .textFieldStyle(.roundedBorder)
-                                    .multilineTextAlignment(.leading)
-                                    Text(L10n.contextWindowExample)
-                                        .font(.caption2).foregroundColor(.secondary)
-                                }
+                                TextField("", text: Binding(
+                                    get: { modelCatalog.models[index].contextWindow.map { String($0) } ?? "" },
+                                    set: { modelCatalog.models[index].contextWindow = UInt64($0) }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.leading)
                                 .frame(width: 100)
 
                                 Button {
