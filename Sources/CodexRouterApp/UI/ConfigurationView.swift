@@ -177,6 +177,28 @@ private struct HelpView: View {
     }
 }
 
+// MARK: - Version
+
+private func appVersion() -> String {
+    // 1. Bundle Info.plist (production .app)
+    if let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+       !ver.isEmpty {
+        return ver
+    }
+    // 2. VERSION file (dev)
+    if let execDir = Bundle.main.executableURL?
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent() {
+        let verPath = execDir.appendingPathComponent("VERSION").path
+        if let ver = try? String(contentsOfFile: verPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           !ver.isEmpty {
+            return ver
+        }
+    }
+    return "0.0.0"
+}
+
 // MARK: - About View
 
 private struct AboutView: View {
@@ -193,7 +215,7 @@ private struct AboutView: View {
                     .font(.title)
                     .fontWeight(.bold)
 
-                Text(L10n.version)
+                Text(L10n.version(appVersion()))
                     .font(.body)
                     .foregroundColor(.secondary)
 

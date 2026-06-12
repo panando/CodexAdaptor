@@ -173,7 +173,7 @@ public enum L10n {
 
     // About
     static var aboutSubtitle: String { lang("A lightweight proxy for connecting custom model providers to OpenAI Codex.", "一个轻量级代理，用于将自定义模型供应商连接到 OpenAI Codex。") }
-    static var version: String { lang("Version 1.0", "版本 1.0") }
+    static func version(_ ver: String) -> String { lang("Version \(ver)", "版本 \(ver)") }
     static var language: String { lang("Language", "语言") }
     static var english: String { lang("English", "英文") }
     static var chinese: String { lang("中文", "中文") }
