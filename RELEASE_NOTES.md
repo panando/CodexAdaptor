@@ -1,3 +1,18 @@
+# v0.1.2
+
+Larger edit and delete buttons in the provider list for easier interaction.
+
+## Changes
+
+- Provider list edit/delete buttons upgraded from small to regular control size — taller and easier to click
+
+## Requirements
+
+- macOS 14.0+ (Sonoma)
+- Swift 5.9+ (for building from source)
+
+---
+
 # v0.1.1
 
 UI overhaul for the provider editor and configuration window, plus a critical provider deletion fix.

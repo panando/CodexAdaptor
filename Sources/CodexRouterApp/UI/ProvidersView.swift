@@ -223,14 +223,14 @@ private struct ProviderRowView: View {
                     Label(L10n.edit, systemImage: "pencil")
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
+                .controlSize(.regular)
                 .help(L10n.editProviderTooltip)
 
                 Button(action: onDelete) {
                     Label(L10n.deleteBtn, systemImage: "trash")
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
+                .controlSize(.regular)
                 .disabled(isCurrent)
                 .help(isCurrent ? L10n.cannotDeleteActive : L10n.deleteProviderTooltip)
             }
