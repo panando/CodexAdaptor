@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Swift 5.9+](https://img.shields.io/badge/swift-5.9+-orange?logo=swift)](https://swift.org)
 [![macOS 14+](https://img.shields.io/badge/platform-mOS%2014%2B-black?logo=apple)](https://developer.apple.com/macos/)
-[![Version](https://img.shields.io/badge/version-0.1.0-green)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.1.3-green)](VERSION)
 
 [安装](#安装) ·
 [快速开始](#快速开始) ·
@@ -32,6 +32,36 @@ CodexAdaptor 位于 Codex 和你选择的供应商之间，自动转换通信协
 ### macOS 应用（推荐）
 
 从 [Releases](https://github.com/panando/CodexAdaptor/releases) 下载 `.dmg` 文件，将 **CodexAdaptor** 拖入"应用程序"文件夹，启动即可。应用以菜单栏图标形式运行，无需终端。
+
+### 修复“应用已损坏”提示
+
+当前 Release 使用 ad-hoc 签名，因为 CodexAdaptor 暂时没有 Apple Developer ID 证书。应用未经过 notarize 公证，因此 macOS Gatekeeper 可能提示：
+
+> “CodexAdaptor”已损坏，无法打开。你应该将它移到废纸篓。
+
+这不表示应用包真的损坏。通常只是 macOS 给下载的应用附加了 quarantine 隔离标记。
+
+**方法一：从系统设置打开**
+
+1. 先尝试从“应用程序”启动 **CodexAdaptor**。
+2. 打开 **系统设置 → 隐私与安全性**。
+3. 滚动到“安全性”区域。
+4. 如果 macOS 显示 **CodexAdaptor** 被阻止，点击 **仍要打开**。
+5. 确认弹窗后重新启动应用。
+
+**方法二：在终端移除隔离标记**
+
+如果方法一没有出现或无效，运行：
+
+```bash
+sudo xattr -dr com.apple.quarantine /Applications/CodexAdaptor.app
+```
+
+Terminal 会要求输入 macOS 密码。输入密码时不显示字符是正常的。
+
+如果应用不在 `/Applications`，可以先输入 `sudo xattr -dr com.apple.quarantine `（末尾保留一个空格），再从 Finder 把 `CodexAdaptor.app` 拖入 Terminal，然后按 Enter。
+
+只对你信任来源下载的应用执行这条命令。如果 CodexAdaptor 未来获得 Developer ID 证书，将提供签名并公证的 Release。
 
 ### 从源码构建
 

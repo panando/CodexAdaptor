@@ -57,6 +57,30 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << EOF
 </plist>
 EOF
 
+# ── Signing and release checks ────────────────────────────────
+echo "==> Fixing Swift runtime rpaths..."
+BINARY_PATH="${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
+FRAMEWORKS_DIR="${APP_BUNDLE}/Contents/Frameworks"
+XCODE_SWIFT_RPATH=$(otool -l "${BINARY_PATH}" | sed -n 's/^ *path \(\/Applications\/Xcode\.app\/.*\/usr\/lib\/swift-[^ ]*\/macosx\) (offset.*$/\1/p' | head -n 1)
+
+if [ -n "${XCODE_SWIFT_RPATH}" ]; then
+    mkdir -p "${FRAMEWORKS_DIR}"
+    if [ ! -f "${XCODE_SWIFT_RPATH}/libswiftCompatibilitySpan.dylib" ]; then
+        echo "ERROR: missing Swift compatibility library: ${XCODE_SWIFT_RPATH}/libswiftCompatibilitySpan.dylib" >&2
+        exit 1
+    fi
+    cp "${XCODE_SWIFT_RPATH}/libswiftCompatibilitySpan.dylib" "${FRAMEWORKS_DIR}/"
+    if ! otool -l "${BINARY_PATH}" | grep -q '@executable_path/../Frameworks'; then
+        install_name_tool -add_rpath "@executable_path/../Frameworks" "${BINARY_PATH}"
+    fi
+    install_name_tool -delete_rpath "${XCODE_SWIFT_RPATH}" "${BINARY_PATH}"
+fi
+
+echo "==> Ad-hoc signing app bundle..."
+codesign --force --deep --sign - "${APP_BUNDLE}"
+
+./verify-release.sh "${APP_BUNDLE}"
+
 # ── DMG ───────────────────────────────────────────────────────
 echo "==> Creating DMG..."
 rm -f "${DMG_NAME}"
@@ -77,6 +101,18 @@ hdiutil create \
     "${DMG_NAME}"
 
 rm -rf "${STAGING}"
+
+echo "==> Verifying DMG contents..."
+MOUNT_DIR=$(mktemp -d)
+hdiutil attach "${DMG_NAME}" -mountpoint "${MOUNT_DIR}" -nobrowse -readonly >/dev/null
+cleanup_mount() {
+    hdiutil detach "${MOUNT_DIR}" >/dev/null 2>&1 || true
+    rmdir "${MOUNT_DIR}" 2>/dev/null || true
+}
+trap cleanup_mount EXIT
+./verify-release.sh "${MOUNT_DIR}/${APP_BUNDLE}"
+cleanup_mount
+trap - EXIT
 
 echo ""
 echo "Done: ${DMG_NAME}"

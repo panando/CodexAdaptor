@@ -7,7 +7,7 @@ Intercepts Codex's Responses API calls and translates them to any upstream provi
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Swift 5.9+](https://img.shields.io/badge/swift-5.9+-orange?logo=swift)](https://swift.org)
 [![macOS 14+](https://img.shields.io/badge/platform-mOS%2014%2B-black?logo=apple)](https://developer.apple.com/macos/)
-[![Version](https://img.shields.io/badge/version-0.1.0-green)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.1.3-green)](VERSION)
 
 [Install](#install) ·
 [Quickstart](#quickstart) ·
@@ -32,6 +32,36 @@ CodexAdaptor sits between Codex and your chosen provider, automatically translat
 ### macOS App (Recommended)
 
 Download the `.dmg` from [Releases](https://github.com/panando/CodexAdaptor/releases), drag **CodexAdaptor** to Applications, and launch it. The app lives in your menu bar — no terminal required.
+
+### Fixing the "damaged app" Message
+
+Current releases are ad-hoc signed because CodexAdaptor does not have an Apple Developer ID certificate yet. The app is not notarized, so macOS Gatekeeper may show:
+
+> "CodexAdaptor" is damaged and can't be opened. You should move it to the Trash.
+
+This does not mean the app bundle is actually damaged. It usually means macOS attached a quarantine flag to the downloaded app.
+
+**Option 1: Open from System Settings**
+
+1. Try launching **CodexAdaptor** from Applications.
+2. Open **System Settings → Privacy & Security**.
+3. Scroll to the Security section.
+4. If macOS shows a blocked **CodexAdaptor** message, click **Open Anyway**.
+5. Confirm the prompt and launch the app again.
+
+**Option 2: Remove the quarantine flag in Terminal**
+
+If Option 1 does not appear or does not work, run:
+
+```bash
+sudo xattr -dr com.apple.quarantine /Applications/CodexAdaptor.app
+```
+
+Terminal will ask for your macOS password. Password characters are not displayed while you type; this is normal.
+
+If your app is not in `/Applications`, type `sudo xattr -dr com.apple.quarantine ` with a trailing space, then drag `CodexAdaptor.app` from Finder into Terminal and press Enter.
+
+Only run this command for apps downloaded from a source you trust. If CodexAdaptor gets a Developer ID certificate in the future, releases will be signed and notarized.
 
 ### Build from Source
 

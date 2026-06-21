@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-请参考cc-switch和EchoBird的具体代码实现逻辑编写codex-adaptor项目的代码。遇到任何问题，先查看cc-switch和EchoBird如何处理。
+请参考references文件夹下cc-switch和EchoBird的具体代码实现逻辑编写codex-adaptor项目的代码。遇到任何问题，先查看cc-switch和EchoBird如何处理。
 
 进行git commit时，在commit注释中，不要`Co-Authored-By: xxx`这部分内容。
 

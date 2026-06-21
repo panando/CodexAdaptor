@@ -1,3 +1,21 @@
+# v0.1.3
+
+Unsigned macOS distribution packaging fixes and clearer install guidance for Gatekeeper quarantine prompts.
+
+## Changes
+
+- Re-sign the completed app bundle with ad-hoc signing after resources are copied into place
+- Remove Xcode Swift runtime rpaths from the release binary and bundle the required compatibility library when needed
+- Add release verification for app bundles and mounted DMG contents
+- Document how to open ad-hoc signed releases when macOS reports the app as damaged
+
+## Requirements
+
+- macOS 14.0+ (Sonoma)
+- Swift 5.9+ (for building from source)
+
+---
+
 # v0.1.2
 
 Larger edit and delete buttons in the provider list for easier interaction.
